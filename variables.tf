@@ -133,4 +133,53 @@ variable "enable_spoke_to_spoke_communication" {
   description = "Enable direct communication between spoke VPCs (full mesh)"
   type        = bool
   default     = true
+}
+
+# ===============================
+# WAF Configuration
+# ===============================
+
+variable "enable_waf" {
+  description = "Enable AWS WAF with Application Load Balancer"
+  type        = bool
+  default     = true
+}
+
+variable "waf_rate_limit" {
+  description = "Rate limit for WAF (requests per 5 minutes)"
+  type        = number
+  default     = 2000
+}
+
+variable "waf_blocked_countries" {
+  description = "List of country codes to block (ISO 3166-1 alpha-2)"
+  type        = list(string)
+  default     = []
+  # Example: ["CN", "RU", "KP"] to block China, Russia, North Korea
+}
+
+variable "waf_allowed_ips" {
+  description = "List of IP addresses/CIDR blocks to always allow"
+  type        = list(string)
+  default     = []
+  # Example: ["1.2.3.4/32", "10.0.0.0/8"]
+}
+
+variable "waf_blocked_ips" {
+  description = "List of IP addresses/CIDR blocks to block"
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_aws_managed_rules" {
+  description = "Enable AWS managed rule sets"
+  type = object({
+    core_rule_set           = optional(bool, true)
+    admin_protection        = optional(bool, true)
+    known_bad_inputs        = optional(bool, true)
+    sql_injection          = optional(bool, true)
+    linux_operating_system = optional(bool, true)
+    unix_operating_system  = optional(bool, false)
+  })
+  default = {}
 } 

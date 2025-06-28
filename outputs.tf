@@ -197,4 +197,46 @@ output "bastion_host" {
       "aws ssm start-session --target <INSTANCE_ID>"
     ]
   } : null
+}
+
+# ===============================
+# WAF Outputs
+# ===============================
+
+output "alb_dns_name" {
+  description = "DNS name of the Application Load Balancer"
+  value       = var.enable_waf ? aws_lb.main[0].dns_name : null
+}
+
+output "alb_zone_id" {
+  description = "Zone ID of the Application Load Balancer"
+  value       = var.enable_waf ? aws_lb.main[0].zone_id : null
+}
+
+output "alb_arn" {
+  description = "ARN of the Application Load Balancer"
+  value       = var.enable_waf ? aws_lb.main[0].arn : null
+}
+
+output "waf_web_acl_arn" {
+  description = "ARN of the WAF Web ACL"
+  value       = var.enable_waf ? aws_wafv2_web_acl.main[0].arn : null
+}
+
+output "waf_web_acl_id" {
+  description = "ID of the WAF Web ACL"
+  value       = var.enable_waf ? aws_wafv2_web_acl.main[0].id : null
+}
+
+output "waf_cloudwatch_log_group" {
+  description = "CloudWatch log group for WAF logs"
+  value       = var.enable_waf ? aws_cloudwatch_log_group.waf_log_group[0].name : null
+}
+
+output "web_application_urls" {
+  description = "URLs to access web applications through ALB"
+  value = var.enable_waf && var.create_test_instances ? {
+    for vpc in var.test_instance_vpcs :
+    vpc => "http://${aws_lb.main[0].dns_name}/${vpc}"
+  } : {}
 } 

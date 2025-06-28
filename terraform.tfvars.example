@@ -115,4 +115,43 @@ ssh_allowed_cidr_blocks = ["0.0.0.0/0"]
 
 # Enable direct communication between spoke VPCs
 # Set to false for strict hub-spoke model (all traffic via shared VPC)
-enable_spoke_to_spoke_communication = true 
+enable_spoke_to_spoke_communication = true
+
+# ===============================
+# WAF Configuration (Optional)
+# ===============================
+
+# Enable AWS WAF with Application Load Balancer
+enable_waf = true
+
+# Rate limiting (requests per 5 minutes from same IP)
+waf_rate_limit = 2000
+
+# Geographic blocking (ISO 3166-1 alpha-2 country codes)
+waf_blocked_countries = [
+  # "CN",  # China
+  # "RU",  # Russia
+  # "KP",  # North Korea
+  # "IR",  # Iran
+]
+
+# IP allowlist (always allow these IPs)
+waf_allowed_ips = [
+  # "203.0.113.0/24",  # Your office IP range
+  # "198.51.100.0/24", # Your datacenter IP range
+]
+
+# IP blocklist (always block these IPs)
+waf_blocked_ips = [
+  # "192.0.2.0/24",    # Known malicious IP range
+]
+
+# AWS Managed Rule Groups
+enable_aws_managed_rules = {
+  core_rule_set           = true   # OWASP Top 10 protection
+  admin_protection        = true   # Admin interface protection  
+  known_bad_inputs        = true   # Known bad signatures
+  sql_injection          = true   # SQL injection protection
+  linux_operating_system = true   # Linux-specific protections
+  unix_operating_system  = false  # Unix-specific protections
+} 
