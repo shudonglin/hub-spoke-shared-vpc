@@ -64,7 +64,7 @@ variable "enable_nat_gateway" {
 variable "single_nat_gateway" {
   description = "Use a single NAT Gateway for all private subnets"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "tags" {
@@ -73,24 +73,64 @@ variable "tags" {
   default     = {}
 }
 
-variable "create_test_instance" {
-  description = "Create a test EC2 instance for connectivity testing"
+variable "create_test_instances" {
+  description = "Create test EC2 instances for connectivity testing"
   type        = bool
   default     = true
 }
 
 variable "test_instance_type" {
-  description = "Instance type for the test EC2 instance"
+  description = "Instance type for the test EC2 instances"
   type        = string
-  default     = "t3.micro"
+  default     = "t2.micro"
 }
 
-variable "test_instance_vpc" {
-  description = "VPC to deploy the test instance in (shared, spoke1, or spoke2)"
-  type        = string
-  default     = "spoke1"
+variable "test_instance_vpcs" {
+  description = "List of VPCs to deploy test instances in"
+  type        = list(string)
+  default     = ["spoke1", "spoke2"]
   validation {
-    condition     = contains(["shared", "spoke1", "spoke2"], var.test_instance_vpc)
-    error_message = "Test instance VPC must be one of: shared, spoke1, spoke2."
+    condition     = alltrue([for vpc in var.test_instance_vpcs : contains(["shared", "spoke1", "spoke2"], vpc)])
+    error_message = "Test instance VPCs must be from: shared, spoke1, spoke2."
   }
+}
+
+variable "enable_vpc_flow_logs" {
+  description = "Enable VPC Flow Logs for all VPCs"
+  type        = bool
+  default     = true
+}
+
+variable "flow_logs_retention_days" {
+  description = "CloudWatch Logs retention period for VPC Flow Logs (days)"
+  type        = number
+  default     = 7
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653], var.flow_logs_retention_days)
+    error_message = "Retention days must be one of the valid CloudWatch Logs retention periods."
+  }
+}
+
+variable "create_bastion_host" {
+  description = "Create a bastion host for SSH access to test instances"
+  type        = bool
+  default     = false
+}
+
+variable "bastion_instance_type" {
+  description = "Instance type for the bastion host"
+  type        = string
+  default     = "t2.micro"
+}
+
+variable "ssh_allowed_cidr_blocks" {
+  description = "CIDR blocks allowed to SSH to bastion host"
+  type        = list(string)
+  default     = ["0.0.0.0/0"]  # Change this to your IP for security
+}
+
+variable "enable_spoke_to_spoke_communication" {
+  description = "Enable direct communication between spoke VPCs (full mesh)"
+  type        = bool
+  default     = true
 } 

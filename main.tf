@@ -259,6 +259,14 @@ resource "aws_ec2_transit_gateway_route_table_propagation" "spoke_propagations" 
   transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke_rt.id
 }
 
+# NEW: Enable spoke-to-spoke communication (optional)
+resource "aws_ec2_transit_gateway_route_table_propagation" "spoke_to_spoke_propagations" {
+  for_each = var.enable_spoke_to_spoke_communication ? { for k, v in local.vpcs : k => v if v.type == "spoke" } : {}
+
+  transit_gateway_attachment_id  = aws_ec2_transit_gateway_vpc_attachment.tgw_attachments[each.key].id
+  transit_gateway_route_table_id = aws_ec2_transit_gateway_route_table.spoke_rt.id
+}
+
 # ===============================
 # Route Tables - Public
 # ===============================
@@ -511,30 +519,6 @@ resource "aws_route53_resolver_endpoint" "outbound" {
 # VPC Endpoints in Shared VPC
 # ===============================
 
-resource "aws_security_group" "vpc_endpoints_sg" {
-  name_prefix = "${var.project_name}-vpc-endpoints-"
-  vpc_id      = aws_vpc.vpcs["shared"].id
-
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = [for vpc in local.vpcs : vpc.cidr]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = merge(local.common_tags, {
-    Name = "${var.project_name}-vpc-endpoints-sg"
-  })
-}
-
 # Gateway endpoints (S3 and DynamoDB)
 resource "aws_vpc_endpoint" "s3" {
   vpc_id       = aws_vpc.vpcs["shared"].id
@@ -572,33 +556,141 @@ resource "aws_vpc_endpoint" "dynamodb" {
   })
 }
 
-# Interface endpoints
-resource "aws_vpc_endpoint" "interface_endpoints" {
-  for_each = {
-    ssm         = "com.amazonaws.${var.aws_region}.ssm"
-    ssmmessages = "com.amazonaws.${var.aws_region}.ssmmessages"
-    ec2messages = "com.amazonaws.${var.aws_region}.ec2messages"
-  }
+# ===============================
+# VPC Flow Logs and KMS
+# ===============================
 
-  vpc_id              = aws_vpc.vpcs["shared"].id
-  service_name        = each.value
-  vpc_endpoint_type   = "Interface"
-  subnet_ids          = [for i in range(length(local.azs)) : aws_subnet.private_subnets["shared-private-${i}"].id]
-  security_group_ids  = [aws_security_group.vpc_endpoints_sg.id]
-  private_dns_enabled = true
+# KMS key for encrypting VPC Flow Logs
+resource "aws_kms_key" "vpc_flow_logs_key" {
+  count       = var.enable_vpc_flow_logs ? 1 : 0
+  description = "KMS key for VPC Flow Logs encryption"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "Enable IAM User Permissions"
+        Effect = "Allow"
+        Principal = {
+          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+        }
+        Action   = "kms:*"
+        Resource = "*"
+      },
+      {
+        Sid    = "Allow CloudWatch Logs"
+        Effect = "Allow"
+        Principal = {
+          Service = "logs.${var.aws_region}.amazonaws.com"
+        }
+        Action = [
+          "kms:Encrypt",
+          "kms:Decrypt",
+          "kms:ReEncrypt*",
+          "kms:GenerateDataKey*",
+          "kms:Describe*"
+        ]
+        Resource = "*"
+        Condition = {
+          ArnEquals = {
+            "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
+          }
+        }
+      }
+    ]
+  })
 
   tags = merge(local.common_tags, {
-    Name = "${var.project_name}-${each.key}-endpoint"
+    Name = "${var.project_name}-vpc-flow-logs-key"
+  })
+}
+
+# KMS key alias
+resource "aws_kms_alias" "vpc_flow_logs_key_alias" {
+  count         = var.enable_vpc_flow_logs ? 1 : 0
+  name          = "alias/${var.project_name}-vpc-flow-logs"
+  target_key_id = aws_kms_key.vpc_flow_logs_key[0].key_id
+}
+
+# CloudWatch Log Groups for VPC Flow Logs
+resource "aws_cloudwatch_log_group" "vpc_flow_logs" {
+  for_each = var.enable_vpc_flow_logs ? local.vpcs : {}
+
+  name              = "/aws/vpc/flowlogs/${each.key}"
+  retention_in_days = var.flow_logs_retention_days
+  kms_key_id        = aws_kms_key.vpc_flow_logs_key[0].arn
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-${each.key}-flow-logs"
+  })
+}
+
+# IAM role for VPC Flow Logs
+resource "aws_iam_role" "vpc_flow_logs_role" {
+  count = var.enable_vpc_flow_logs ? 1 : 0
+  name  = "${var.project_name}-vpc-flow-logs-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+# IAM policy for VPC Flow Logs
+resource "aws_iam_role_policy" "vpc_flow_logs_policy" {
+  count = var.enable_vpc_flow_logs ? 1 : 0
+  name  = "${var.project_name}-vpc-flow-logs-policy"
+  role  = aws_iam_role.vpc_flow_logs_role[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+        Resource = "arn:aws:logs:${var.aws_region}:${data.aws_caller_identity.current.account_id}:*"
+      }
+    ]
+  })
+}
+
+# VPC Flow Logs
+resource "aws_flow_log" "vpc_flow_logs" {
+  for_each = var.enable_vpc_flow_logs ? local.vpcs : {}
+
+  iam_role_arn    = aws_iam_role.vpc_flow_logs_role[0].arn
+  log_destination = aws_cloudwatch_log_group.vpc_flow_logs[each.key].arn
+  traffic_type    = "ALL"
+  vpc_id          = aws_vpc.vpcs[each.key].id
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-${each.key}-flow-log"
   })
 }
 
 # ===============================
-# Test EC2 Instance
+# Test EC2 Instances
 # ===============================
 
 # Get the latest Amazon Linux 2 AMI
 data "aws_ami" "amazon_linux" {
-  count       = var.create_test_instance ? 1 : 0
+  count       = var.create_test_instances ? 1 : 0
   most_recent = true
   owners      = ["amazon"]
 
@@ -613,24 +705,25 @@ data "aws_ami" "amazon_linux" {
   }
 }
 
-# Security group for test instance
+# Security groups for test instances (one per VPC)
 resource "aws_security_group" "test_instance_sg" {
-  count       = var.create_test_instance ? 1 : 0
-  name_prefix = "${var.project_name}-test-instance-"
-  vpc_id      = aws_vpc.vpcs[var.test_instance_vpc].id
+  for_each = var.create_test_instances ? toset(var.test_instance_vpcs) : toset([])
 
-  # Allow SSH from VPC CIDR
+  name_prefix = "${var.project_name}-test-${each.key}-"
+  vpc_id      = aws_vpc.vpcs[each.key].id
+
+  # Allow SSH from all VPC CIDRs
   ingress {
-    description = "SSH from VPC"
+    description = "SSH from VPCs"
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
     cidr_blocks = [for vpc in local.vpcs : vpc.cidr]
   }
 
-  # Allow ICMP for ping testing
+  # Allow ICMP for ping testing between all VPCs
   ingress {
-    description = "ICMP"
+    description = "ICMP (ping) from all VPCs"
     from_port   = -1
     to_port     = -1
     protocol    = "icmp"
@@ -639,7 +732,7 @@ resource "aws_security_group" "test_instance_sg" {
 
   # Allow HTTP for testing web connectivity
   ingress {
-    description = "HTTP"
+    description = "HTTP from all VPCs"
     from_port   = 80
     to_port     = 80
     protocol    = "tcp"
@@ -648,7 +741,7 @@ resource "aws_security_group" "test_instance_sg" {
 
   # Allow HTTPS for testing web connectivity
   ingress {
-    description = "HTTPS"
+    description = "HTTPS from all VPCs"
     from_port   = 443
     to_port     = 443
     protocol    = "tcp"
@@ -664,14 +757,14 @@ resource "aws_security_group" "test_instance_sg" {
   }
 
   tags = merge(local.common_tags, {
-    Name = "${var.project_name}-test-instance-sg"
+    Name = "${var.project_name}-test-${each.key}-sg"
   })
 }
 
-# IAM role for test instance (allows SSM access)
+# IAM role for test instances (allows SSM access)
 resource "aws_iam_role" "test_instance_role" {
-  count = var.create_test_instance ? 1 : 0
-  name  = "${var.project_name}-test-instance-role"
+  count = var.create_test_instances ? 1 : 0
+  name  = "${var.project_name}-test-instances-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -691,27 +784,28 @@ resource "aws_iam_role" "test_instance_role" {
 
 # Attach SSM managed policy to the role
 resource "aws_iam_role_policy_attachment" "test_instance_ssm_policy" {
-  count      = var.create_test_instance ? 1 : 0
+  count      = var.create_test_instances ? 1 : 0
   role       = aws_iam_role.test_instance_role[0].name
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# Instance profile for the test instance
+# Instance profile for test instances
 resource "aws_iam_instance_profile" "test_instance_profile" {
-  count = var.create_test_instance ? 1 : 0
-  name  = "${var.project_name}-test-instance-profile"
+  count = var.create_test_instances ? 1 : 0
+  name  = "${var.project_name}-test-instances-profile"
   role  = aws_iam_role.test_instance_role[0].name
 
   tags = local.common_tags
 }
 
-# Test EC2 instance
-resource "aws_instance" "test_instance" {
-  count                  = var.create_test_instance ? 1 : 0
+# Test EC2 instances
+resource "aws_instance" "test_instances" {
+  for_each = var.create_test_instances ? toset(var.test_instance_vpcs) : toset([])
+
   ami                    = data.aws_ami.amazon_linux[0].id
   instance_type          = var.test_instance_type
-  subnet_id              = aws_subnet.private_subnets["${var.test_instance_vpc}-private-0"].id
-  vpc_security_group_ids = [aws_security_group.test_instance_sg[0].id]
+  subnet_id              = aws_subnet.private_subnets["${each.key}-private-0"].id
+  vpc_security_group_ids = [aws_security_group.test_instance_sg[each.key].id]
   iam_instance_profile   = aws_iam_instance_profile.test_instance_profile[0].name
 
   user_data_base64 = base64encode(<<-EOF
@@ -724,29 +818,201 @@ resource "aws_instance" "test_instance" {
               rpm -U ./amazon-cloudwatch-agent.rpm
               
               # Create a simple web server for testing
-              echo "<h1>Test Instance in ${var.test_instance_vpc} VPC</h1>" > /var/www/html/index.html
+              echo "<h1>Test Instance in ${each.key} VPC</h1>" > /var/www/html/index.html
               echo "<p>Instance ID: $(curl -s http://169.254.169.254/latest/meta-data/instance-id)</p>" >> /var/www/html/index.html
               echo "<p>Private IP: $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)</p>" >> /var/www/html/index.html
               echo "<p>AZ: $(curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone)</p>" >> /var/www/html/index.html
+              echo "<p>VPC: ${each.key}</p>" >> /var/www/html/index.html
               
               # Install and start httpd
               yum install -y httpd
               systemctl start httpd
               systemctl enable httpd
+              
+              # Create connectivity test script
+              cat > /home/ec2-user/test-connectivity.sh << 'SCRIPT'
+              #!/bin/bash
+              echo "=== Connectivity Test from ${each.key} VPC ==="
+              echo "Current instance IP: $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)"
+              echo ""
+              
+              # Test DNS resolution
+              echo "=== DNS Resolution Test ==="
+              for vpc in shared spoke1 spoke2; do
+                if [ "$vpc" != "${each.key}" ]; then
+                  echo "Testing DNS for test-$vpc.internal.local..."
+                  nslookup test-$vpc.internal.local || echo "DNS lookup failed for test-$vpc"
+                fi
+              done
+              echo ""
+              
+              # Test ping connectivity
+              echo "=== Ping Test ==="
+              for vpc in shared spoke1 spoke2; do
+                if [ "$vpc" != "${each.key}" ]; then
+                  echo "Pinging test-$vpc.internal.local..."
+                  ping -c 3 test-$vpc.internal.local || echo "Ping failed to test-$vpc"
+                  echo ""
+                fi
+              done
+              
+              # Test HTTP connectivity
+              echo "=== HTTP Test ==="
+              for vpc in shared spoke1 spoke2; do
+                if [ "$vpc" != "${each.key}" ]; then
+                  echo "Testing HTTP to test-$vpc.internal.local..."
+                  curl -s --connect-timeout 5 http://test-$vpc.internal.local || echo "HTTP connection failed to test-$vpc"
+                  echo ""
+                fi
+              done
+              SCRIPT
+              
+              chmod +x /home/ec2-user/test-connectivity.sh
+              chown ec2-user:ec2-user /home/ec2-user/test-connectivity.sh
               EOF
   )
 
   tags = merge(local.common_tags, {
-    Name = "${var.project_name}-test-instance-${var.test_instance_vpc}"
+    Name = "${var.project_name}-test-${each.key}"
   })
 }
 
-# Route53 record for test instance
-resource "aws_route53_record" "test_instance_record" {
-  count   = var.create_test_instance ? 1 : 0
+# Route53 records for test instances
+resource "aws_route53_record" "test_instance_records" {
+  for_each = var.create_test_instances ? toset(var.test_instance_vpcs) : toset([])
+
   zone_id = aws_route53_zone.private_zone.zone_id
-  name    = "test-${var.test_instance_vpc}"
+  name    = "test-${each.key}"
   type    = "A"
   ttl     = 300
-  records = [aws_instance.test_instance[0].private_ip]
+  records = [aws_instance.test_instances[each.key].private_ip]
+}
+
+# ===============================
+# Optional Bastion Host
+# ===============================
+
+# EIP for bastion host
+resource "aws_eip" "bastion_eip" {
+  count  = var.create_bastion_host ? 1 : 0
+  domain = "vpc"
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-bastion-eip"
+  })
+}
+
+# Security group for bastion host
+resource "aws_security_group" "bastion_sg" {
+  count       = var.create_bastion_host ? 1 : 0
+  name_prefix = "${var.project_name}-bastion-"
+  vpc_id      = aws_vpc.vpcs["shared"].id
+
+  # Allow SSH from specified CIDR blocks
+  ingress {
+    description = "SSH from allowed IPs"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = var.ssh_allowed_cidr_blocks
+  }
+
+  # Allow all outbound traffic
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-bastion-sg"
+  })
+}
+
+# Security group rule to allow SSH from bastion to test instances
+resource "aws_security_group_rule" "test_instances_ssh_from_bastion" {
+  for_each = var.create_bastion_host && var.create_test_instances ? aws_security_group.test_instance_sg : {}
+
+  type                     = "ingress"
+  from_port                = 22
+  to_port                  = 22
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.bastion_sg[0].id
+  security_group_id        = each.value.id
+}
+
+# AMI for bastion host
+data "aws_ami" "bastion_amazon_linux" {
+  count       = var.create_bastion_host ? 1 : 0
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
+# Bastion host EC2 instance
+resource "aws_instance" "bastion" {
+  count                       = var.create_bastion_host ? 1 : 0
+  ami                         = data.aws_ami.bastion_amazon_linux[0].id
+  instance_type               = var.bastion_instance_type
+  subnet_id                   = aws_subnet.public_subnets["shared-public-0"].id
+  vpc_security_group_ids      = [aws_security_group.bastion_sg[0].id]
+  iam_instance_profile        = var.create_test_instances ? aws_iam_instance_profile.test_instance_profile[0].name : null
+  associate_public_ip_address = true
+
+  user_data_base64 = base64encode(<<-EOF
+              #!/bin/bash
+              yum update -y
+              yum install -y awscli htop curl wget telnet nmap-ncat bind-utils
+
+              # Create helper script for connecting to test instances
+              cat > /home/ec2-user/connect-to-instance.sh << 'SCRIPT'
+              #!/bin/bash
+              echo "=== Bastion Host - Instance Connection Helper ==="
+              echo "Available test instances:"
+              echo "- test-spoke1.internal.local"
+              echo "- test-spoke2.internal.local"
+              echo ""
+              echo "Usage examples:"
+              echo "ssh ec2-user@test-spoke1.internal.local"
+              echo "ssh ec2-user@test-spoke2.internal.local"
+              echo ""
+              echo "Or use SSM Session Manager (no SSH needed):"
+              echo "aws ssm start-session --target <INSTANCE_ID>"
+              SCRIPT
+
+              chmod +x /home/ec2-user/connect-to-instance.sh
+              chown ec2-user:ec2-user /home/ec2-user/connect-to-instance.sh
+              EOF
+  )
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-bastion-host"
+  })
+}
+
+# Associate EIP with bastion host
+resource "aws_eip_association" "bastion_eip_assoc" {
+  count       = var.create_bastion_host ? 1 : 0
+  instance_id = aws_instance.bastion[0].id
+  allocation_id = aws_eip.bastion_eip[0].id
+}
+
+# Route53 record for bastion host
+resource "aws_route53_record" "bastion_record" {
+  count   = var.create_bastion_host ? 1 : 0
+  zone_id = aws_route53_zone.private_zone.zone_id
+  name    = "bastion"
+  type    = "A"
+  ttl     = 300
+  records = [aws_instance.bastion[0].private_ip]
 } 

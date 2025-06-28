@@ -66,23 +66,5 @@ locals {
       vpc_endpoint_type   = "Gateway"
       route_table_ids     = []
     }
-    ssm = {
-      service             = "ssm"
-      vpc_endpoint_type   = "Interface"
-      subnet_ids          = []
-      security_group_ids  = []
-    }
-    ssmmessages = {
-      service             = "ssmmessages"
-      vpc_endpoint_type   = "Interface"
-      subnet_ids          = []
-      security_group_ids  = []
-    }
-    ec2messages = {
-      service             = "ec2messages"
-      vpc_endpoint_type   = "Interface"
-      subnet_ids          = []
-      security_group_ids  = []
-    }
   }
 } 

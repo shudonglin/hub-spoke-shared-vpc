@@ -9,7 +9,7 @@ This configuration creates:
 - **3 VPCs**: 1 shared services VPC (hub) and 2 spoke VPCs
 - **Transit Gateway**: Central connectivity hub for inter-VPC communication
 - **Route53**: Private hosted zone with DNS resolution across all VPCs
-- **VPC Endpoints**: Centralized AWS service endpoints in the shared VPC
+- **VPC Endpoints**: Centralized AWS service gateway endpoints (S3, DynamoDB) in the shared VPC
 - **Multi-AZ Deployment**: Each VPC spans 3 availability zones
 
 ## VPC Structure
@@ -53,20 +53,24 @@ Each VPC includes:
 - **Cross-VPC DNS**: DNS queries resolved across all VPCs via resolver endpoints
 - **Inbound/Outbound Resolvers**: Bi-directional DNS resolution support
 
-### Security
+### Security & Monitoring
 - **Network Segmentation**: Isolated spoke VPCs with controlled communication
 - **Security Groups**: Least privilege access for VPC endpoints and resolvers
-- **Private Endpoints**: AWS service access without internet traversal
+- **Private Endpoints**: S3 and DynamoDB access without internet traversal (interface endpoints removed for cost optimization)
+- **VPC Flow Logs**: Comprehensive network traffic monitoring with KMS encryption
+- **CloudWatch Integration**: Centralized logging with configurable retention periods
 
 ### AWS Service Access
-- **VPC Endpoints**: Centralized access to AWS services (S3, DynamoDB, SSM, etc.)
-- **Private Connectivity**: No internet traffic for AWS service communication
+- **VPC Endpoints**: Centralized access to AWS services (S3, DynamoDB)
+- **Private Connectivity**: No internet traffic for AWS service communication to S3/DynamoDB
 
 ### Testing & Validation
-- **Test EC2 Instance**: Optional t3.micro instance for connectivity testing
+- **Multiple Test Instances**: Optional t2.micro instances across multiple VPCs for connectivity testing
+- **Cross-VPC Communication**: Automated testing scripts for ping, DNS, and HTTP connectivity
 - **SSM Session Manager**: Secure shell access without SSH keys or bastion hosts
 - **Built-in Web Server**: Simple HTTP server for testing cross-VPC connectivity
-- **DNS Testing**: Route53 record for testing internal DNS resolution
+- **DNS Testing**: Route53 records for testing internal DNS resolution
+- **Connectivity Test Scripts**: Pre-installed scripts for comprehensive network testing
 
 ## Prerequisites
 
@@ -116,9 +120,11 @@ Each VPC includes:
 | `domain_name` | Domain for private hosted zone | `string` | `"internal.local"` |
 | `enable_nat_gateway` | Enable NAT Gateway | `bool` | `true` |
 | `single_nat_gateway` | Use single NAT Gateway | `bool` | `false` |
-| `create_test_instance` | Create test EC2 instance | `bool` | `true` |
-| `test_instance_type` | Test instance type | `string` | `"t3.micro"` |
-| `test_instance_vpc` | VPC for test instance | `string` | `"spoke1"` |
+| `create_test_instances` | Create test EC2 instances | `bool` | `true` |
+| `test_instance_type` | Test instance type | `string` | `"t2.micro"` |
+| `test_instance_vpcs` | List of VPCs for test instances | `list(string)` | `["spoke1", "spoke2"]` |
+| `enable_vpc_flow_logs` | Enable VPC Flow Logs | `bool` | `true` |
+| `flow_logs_retention_days` | CloudWatch retention period | `number` | `7` |
 
 ## Outputs
 
@@ -127,8 +133,10 @@ Each VPC includes:
 | `vpc_ids` | Map of VPC names to IDs |
 | `transit_gateway_id` | Transit Gateway ID |
 | `route53_private_zone_id` | Private hosted zone ID |
-| `vpc_endpoint_ids` | Map of VPC endpoint IDs |
-| `test_instance` | Test instance information and connection details |
+| `vpc_endpoint_ids` | Map of VPC endpoint IDs (S3, DynamoDB) |
+| `vpc_flow_logs` | VPC Flow Logs configuration and KMS details |
+| `test_instances` | Map of test instances information by VPC |
+| `connectivity_test_commands` | Commands for testing cross-VPC connectivity |
 
 ## CIDR Allocation
 
@@ -186,7 +194,8 @@ Default CIDR allocation per VPC:
 ## Cost Optimization
 
 - NAT Gateways can be configured as single or per-AZ
-- VPC endpoints reduce data transfer costs
+- Gateway VPC endpoints (S3, DynamoDB) reduce data transfer costs and are free
+- Interface VPC endpoints removed to reduce costs (~$22/month savings)
 - Transit Gateway consolidates connectivity
 
 ## Customization
@@ -195,39 +204,89 @@ The configuration is highly customizable:
 
 1. **Modify CIDR blocks** in `terraform.tfvars`
 2. **Adjust subnet counts** by changing the AZ count
-3. **Add/remove VPC endpoints** in the locals
+3. **Add/remove VPC endpoints** in the locals (currently includes S3 and DynamoDB gateway endpoints)
 4. **Configure additional security groups** as needed
 
 ## Testing Connectivity
 
 After deployment, you can test the infrastructure:
 
-### 1. Connect to Test Instance
-```bash
-# Get the instance ID from outputs
-terraform output test_instance
+### 1. Connect to Test Instances (Multiple Options)
 
-# Connect via SSM Session Manager (no SSH keys needed)
-aws ssm start-session --target <INSTANCE_ID>
+#### **Option A: SSM Session Manager (Recommended - No SSH needed)**
+```bash
+# Get instances information
+terraform output test_instances
+
+# Connect directly via AWS CLI (most convenient)
+aws ssm start-session --target <INSTANCE_ID> --region ap-southeast-1
+
+# Or connect via AWS Console
+# Go to: EC2 Console → Instances → Select Instance → Connect → Session Manager
+```
+
+#### **Option B: SSH via SSM Port Forwarding (if you prefer SSH)**
+```bash
+# Forward local port 2222 to instance SSH port 22
+aws ssm start-session --target <INSTANCE_ID> \
+    --document-name AWS-StartPortForwardingSession \
+    --parameters '{"portNumber":["22"],"localPortNumber":["2222"]}' \
+    --region ap-southeast-1
+
+# In another terminal, SSH via localhost
+ssh -i ~/.ssh/your-key.pem -p 2222 ec2-user@localhost
+```
+
+#### **Option C: Instance Connect Endpoint (Alternative)**
+```bash
+# Direct SSH without permanent EIP (AWS feature)
+aws ec2-instance-connect send-ssh-public-key \
+    --instance-id <INSTANCE_ID> \
+    --instance-os-user ec2-user \
+    --ssh-public-key file://~/.ssh/id_rsa.pub \
+    --region ap-southeast-1
+
+# Then SSH directly
+ssh ec2-user@<PRIVATE_IP>
 ```
 
 ### 2. Test Cross-VPC Connectivity
 ```bash
-# Inside the test instance, test connectivity to other VPCs
-ping 10.0.11.10  # Shared VPC private subnet
-ping 10.2.11.10  # Spoke2 VPC private subnet
+# Inside any test instance, run the comprehensive connectivity test
+sudo -u ec2-user /home/ec2-user/test-connectivity.sh
 
-# Test DNS resolution
+# Or test individual components manually:
+# Test DNS resolution between VPCs
 nslookup test-spoke1.internal.local
+nslookup test-spoke2.internal.local
+
+# Test ping connectivity between VPCs  
+ping -c 3 test-spoke1.internal.local
+ping -c 3 test-spoke2.internal.local
+
+# Test HTTP connectivity between instances
 curl http://test-spoke1.internal.local
+curl http://test-spoke2.internal.local
+```
+
+### 3. Monitor VPC Flow Logs
+```bash
+# View VPC Flow Logs in CloudWatch
+aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flowlogs"
+
+# Get recent flow logs for a specific VPC
+aws logs tail /aws/vpc/flowlogs/spoke1 --follow
 ```
 
 ### 3. Test VPC Endpoints
 ```bash
-# Test S3 endpoint
+# Test S3 endpoint (private gateway endpoint)
 aws s3 ls
 
-# Test SSM connectivity
+# Test DynamoDB endpoint (private gateway endpoint)
+aws dynamodb list-tables
+
+# Note: SSM uses public endpoints (no private interface endpoints configured)
 aws ssm get-parameter --name "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
 ```
 
