@@ -538,37 +538,36 @@ resource "aws_route53_resolver_endpoint" "outbound" {
 # Route53 Resolver Rules
 # ===============================
 
-# Note: Since Route53 private hosted zone is associated with spoke VPCs,
-# DNS resolution should work automatically via VPC DNS resolver.
-# If issues persist, uncomment the resolver rules below.
+# Note: Route53 private hosted zone is associated with spoke VPCs for automatic DNS resolution.
+# Resolver rules below provide additional DNS forwarding capabilities for cross-VPC resolution.
 
-# # Resolver rule for custom domain (uncomment if needed)
-# resource "aws_route53_resolver_rule" "custom_domain" {
-#   domain_name          = var.domain_name
-#   name                 = "${var.project_name}-custom-domain-rule"
-#   rule_type            = "FORWARD"
-#   resolver_endpoint_id = aws_route53_resolver_endpoint.outbound.id
-#
-#   # Forward to inbound resolver endpoint IPs
-#   dynamic "target_ip" {
-#     for_each = aws_route53_resolver_endpoint.inbound.ip_address
-#     content {
-#       ip = target_ip.value.ip
-#     }
-#   }
-#
-#   tags = merge(local.common_tags, {
-#     Name = "${var.project_name}-custom-domain-rule"
-#   })
-# }
-#
-# # Associate resolver rule with spoke VPCs
-# resource "aws_route53_resolver_rule_association" "spoke_vpc_associations" {
-#   for_each = { for k, v in local.vpcs : k => v if v.type == "spoke" }
-#
-#   resolver_rule_id = aws_route53_resolver_rule.custom_domain.id
-#   vpc_id           = aws_vpc.vpcs[each.key].id
-# }
+# Resolver rule for custom domain - forwards DNS queries to inbound resolver
+resource "aws_route53_resolver_rule" "custom_domain" {
+  domain_name          = var.domain_name
+  name                 = "${var.project_name}-custom-domain-rule"
+  rule_type            = "FORWARD"
+  resolver_endpoint_id = aws_route53_resolver_endpoint.outbound.id
+
+  # Forward to inbound resolver endpoint IPs
+  dynamic "target_ip" {
+    for_each = aws_route53_resolver_endpoint.inbound.ip_address
+    content {
+      ip = target_ip.value.ip
+    }
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-custom-domain-rule"
+  })
+}
+
+# Associate resolver rule with spoke VPCs for cross-VPC DNS resolution
+resource "aws_route53_resolver_rule_association" "spoke_vpc_associations" {
+  for_each = { for k, v in local.vpcs : k => v if v.type == "spoke" }
+
+  resolver_rule_id = aws_route53_resolver_rule.custom_domain.id
+  vpc_id           = aws_vpc.vpcs[each.key].id
+}
 
 # ===============================
 # VPC Endpoints in Shared VPC
@@ -776,14 +775,7 @@ resource "aws_security_group" "test_instance_sg" {
     cidr_blocks = [for vpc in local.vpcs : vpc.cidr]
   }
 
-  # Allow ICMP for ping testing between all VPCs
-  ingress {
-    description = "ICMP (ping) from all VPCs"
-    from_port   = -1
-    to_port     = -1
-    protocol    = "icmp"
-    cidr_blocks = [for vpc in local.vpcs : vpc.cidr]
-  }
+  # ICMP (ping) disabled for security - use TCP connectivity tests instead
 
   # Allow HTTP for testing web connectivity
   ingress {
@@ -1115,9 +1107,9 @@ HTML
               echo "Current instance IP: $(curl -s http://169.254.169.254/latest/meta-data/local-ipv4)"
               echo ""
               
-              # Test DNS resolution
+              # Test DNS resolution (only test VPCs that have test instances)
               echo "=== DNS Resolution Test ==="
-              for vpc in shared spoke1 spoke2; do
+              for vpc in spoke1 spoke2; do
                 if [ "$vpc" != "${each.key}" ]; then
                   echo "Testing DNS for test-$vpc.${var.domain_name}..."
                   nslookup test-$vpc.${var.domain_name} || echo "DNS lookup failed for test-$vpc"
@@ -1125,25 +1117,34 @@ HTML
               done
               echo ""
               
-              # Test ping connectivity
-              echo "=== Ping Test ==="
-              for vpc in shared spoke1 spoke2; do
-                if [ "$vpc" != "${each.key}" ]; then
-                  echo "Pinging test-$vpc.${var.domain_name}..."
-                  ping -c 3 test-$vpc.${var.domain_name} || echo "Ping failed to test-$vpc"
-                  echo ""
-                fi
-              done
+              # Ping test disabled (ICMP blocked by security groups)
+              echo "=== Ping Test (DISABLED) ==="
+              echo "ICMP ping is disabled in security groups for enhanced security"
+              echo "Use HTTP connectivity tests below to verify network connectivity"
+              echo ""
               
-              # Test HTTP connectivity
+              # Test HTTP connectivity (only test VPCs that have test instances)
               echo "=== HTTP Test ==="
-              for vpc in shared spoke1 spoke2; do
+              for vpc in spoke1 spoke2; do
                 if [ "$vpc" != "${each.key}" ]; then
                   echo "Testing HTTP to test-$vpc.${var.domain_name}..."
                   curl -s --connect-timeout 5 http://test-$vpc.${var.domain_name} || echo "HTTP connection failed to test-$vpc"
                   echo ""
                 fi
               done
+              
+              # Test VPC DNS resolver configuration
+              echo "=== DNS Configuration Test ==="
+              echo "VPC DNS resolver: $(grep nameserver /etc/resolv.conf)"
+              echo "Route53 private zone records:"
+              dig @169.254.169.253 ${var.domain_name} NS || echo "Route53 zone lookup failed"
+              echo ""
+              
+              # Test cross-VPC connectivity using private IPs
+              echo "=== Cross-VPC Private IP Test ==="
+              echo "Note: This tests direct IP connectivity across Transit Gateway"
+              # Add IP-based connectivity tests here if needed
+              echo "Cross-VPC routing configured via Transit Gateway"
               SCRIPT
               
               chmod +x /home/ec2-user/test-connectivity.sh

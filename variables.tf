@@ -186,8 +186,5 @@ variable "enable_aws_managed_rules" {
   default = {}
 }
 
-variable "enable_spoke2_alb_access" {
-  description = "Enable ALB routing to spoke2 VPC (if false, spoke2 remains independent)"
-  type        = bool
-  default     = true
-} 
+# Removed enable_spoke2_alb_access variable - spoke2 is now completely independent
+# ALB is only in spoke1 VPC for direct access to app1 

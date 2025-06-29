@@ -2,12 +2,12 @@
 # Application Load Balancer
 # ===============================
 
-# Security group for ALB
+# Security group for ALB (in Spoke1 VPC)
 resource "aws_security_group" "alb_sg" {
   count       = var.enable_waf ? 1 : 0
-  name_prefix = "${var.project_name}-alb-"
-  description = "Security group for Application Load Balancer"
-  vpc_id      = aws_vpc.vpcs["shared"].id
+  name_prefix = "${var.project_name}-spoke1-alb-"
+  description = "Security group for Application Load Balancer in Spoke1 VPC"
+  vpc_id      = aws_vpc.vpcs["spoke1"].id  # ALB now in spoke1 VPC
 
   # Allow HTTP from anywhere
   ingress {
@@ -36,130 +36,85 @@ resource "aws_security_group" "alb_sg" {
   }
 
   tags = merge(local.common_tags, {
-    Name = "${var.project_name}-alb-sg"
+    Name = "${var.project_name}-spoke1-alb-sg"
   })
 }
 
-# Application Load Balancer
+# Application Load Balancer (in Spoke1 VPC)
 resource "aws_lb" "main" {
   count              = var.enable_waf ? 1 : 0
-  name               = "${var.project_name}-alb"
+  name               = "${var.project_name}-spoke1-alb"
   internal           = false
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_sg[0].id]
   
-  # Place ALB in public subnets across multiple AZs
+  # Place ALB in spoke1 public subnets across multiple AZs
   subnets = [
     for az_index in range(length(local.azs)) :
-    aws_subnet.public_subnets["shared-public-${az_index}"].id
+    aws_subnet.public_subnets["spoke1-public-${az_index}"].id
   ]
 
   enable_deletion_protection = false
 
   tags = merge(local.common_tags, {
-    Name = "${var.project_name}-alb"
+    Name = "${var.project_name}-spoke1-alb"
   })
 }
 
-# Target groups for spoke VPCs (spoke1 always, spoke2 conditional)
-resource "aws_lb_target_group" "spoke_targets" {
-  for_each = var.enable_waf && var.create_test_instances ? toset([
-    for vpc in var.test_instance_vpcs : vpc 
-    if vpc == "spoke1" || (vpc == "spoke2" && var.enable_spoke2_alb_access)
-  ]) : toset([])
+# Target group for spoke1 instance (simplified - no cross-VPC routing needed)
+resource "aws_lb_target_group" "spoke1_app" {
+  count = var.enable_waf && var.create_test_instances && contains(var.test_instance_vpcs, "spoke1") ? 1 : 0
   
-  name        = "${var.project_name}-${each.key}-tg"
+  name        = "${var.project_name}-spoke1-app-tg"
   port        = 80
   protocol    = "HTTP"
-  vpc_id      = aws_vpc.vpcs["shared"].id  # ALB target groups must be in same VPC as ALB
-  target_type = "ip"  # Use IP targets for cross-VPC routing
+  vpc_id      = aws_vpc.vpcs["spoke1"].id  # Target group in same VPC as ALB
+  target_type = "instance"  # Direct instance targeting (more efficient)
 
   health_check {
     enabled             = true
     healthy_threshold   = 2
     interval            = 30
     matcher             = "200"
-    path                = "/health"  # Use health endpoint for better reliability
+    path                = "/health"
     port                = "traffic-port"
     protocol            = "HTTP"
-    timeout             = 10         # Increased timeout for cross-VPC routing
-    unhealthy_threshold = 3          # Allow more retries for cross-VPC latency
+    timeout             = 5          # Reduced timeout (no cross-VPC latency)
+    unhealthy_threshold = 2          # Faster failure detection
   }
 
   tags = merge(local.common_tags, {
-    Name = "${var.project_name}-${each.key}-tg"
-    Purpose = each.key == "spoke1" ? "Primary Web Server" : "Secondary/Test Server"
+    Name = "${var.project_name}-spoke1-app-tg"
+    Purpose = "App1 Web Server"
   })
 }
 
-# Target group attachments for spoke VPCs
-resource "aws_lb_target_group_attachment" "spoke_targets" {
-  for_each = var.enable_waf && var.create_test_instances ? toset([
-    for vpc in var.test_instance_vpcs : vpc 
-    if vpc == "spoke1" || (vpc == "spoke2" && var.enable_spoke2_alb_access)
-  ]) : toset([])
+# Target group attachment for spoke1 instance
+resource "aws_lb_target_group_attachment" "spoke1_app" {
+  count = var.enable_waf && var.create_test_instances && contains(var.test_instance_vpcs, "spoke1") ? 1 : 0
 
-  target_group_arn  = aws_lb_target_group.spoke_targets[each.key].arn
-  target_id         = aws_instance.test_instances[each.key].private_ip
-  port              = 80
-  availability_zone = aws_instance.test_instances[each.key].availability_zone
+  target_group_arn = aws_lb_target_group.spoke1_app[0].arn
+  target_id        = aws_instance.test_instances["spoke1"].id  # Direct instance ID
+  port             = 80
 }
 
-# ALB Listener (HTTP) - spoke1 primary, spoke2 optional
+# ALB Listener (HTTP) - Simple routing to spoke1 app
 resource "aws_lb_listener" "main" {
   count             = var.enable_waf ? 1 : 0
   load_balancer_arn = aws_lb.main[0].arn
   port              = "80"
   protocol          = "HTTP"
 
-  # Default action - forward to primary web server (spoke1)
+  # Default action - forward all traffic to spoke1 app
   default_action {
     type             = "forward"
-    target_group_arn = var.create_test_instances && contains(var.test_instance_vpcs, "spoke1") ? aws_lb_target_group.spoke_targets["spoke1"].arn : null
+    target_group_arn = var.create_test_instances && contains(var.test_instance_vpcs, "spoke1") ? aws_lb_target_group.spoke1_app[0].arn : null
   }
 }
 
-# Listener rules for optional routing to spoke2 (when enabled)
-resource "aws_lb_listener_rule" "spoke2_routing" {
-  count = var.enable_waf && var.create_test_instances && var.enable_spoke2_alb_access && contains(var.test_instance_vpcs, "spoke2") ? 1 : 0
-
-  listener_arn = aws_lb_listener.main[0].arn
-  priority     = 100
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.spoke_targets["spoke2"].arn
-  }
-
-  condition {
-    path_pattern {
-      values = ["/spoke2*", "/test2*", "/secondary*"]
-    }
-  }
-}
-
-# Optional: Host-based routing for spoke2 (when enabled)
-resource "aws_lb_listener_rule" "spoke2_host_routing" {
-  count = var.enable_waf && var.create_test_instances && var.enable_spoke2_alb_access && contains(var.test_instance_vpcs, "spoke2") ? 1 : 0
-
-  listener_arn = aws_lb_listener.main[0].arn
-  priority     = 101
-
-  action {
-    type             = "forward"
-    target_group_arn = aws_lb_target_group.spoke_targets["spoke2"].arn
-  }
-
-  condition {
-    host_header {
-      values = ["spoke2.*", "test2.*", "secondary.*"]
-    }
-  }
-}
-
-# Note: Security group rules for HTTP access to test instances are already defined in main.tf
-# The test instance security groups already allow HTTP access from all VPC CIDRs (including shared VPC)
-# No additional rules needed here for ALB access
+# Note: Security group rules for HTTP access to spoke1 instance are already defined in main.tf
+# The spoke1 instance security group allows HTTP access from spoke1 VPC (where ALB is located)
+# Spoke2 instance is completely independent (no ALB access)
 
 # ===============================
 # AWS WAF Web ACL

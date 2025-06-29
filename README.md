@@ -1,32 +1,92 @@
-# Hub and Spoke VPC Architecture with Terraform
+# Hub and Spoke VPC Architecture with Distributed ALB and WAF
 
-This Terraform configuration creates a hub and spoke VPC architecture on AWS with shared services and DNS resolution.
+This Terraform configuration creates a hub and spoke VPC architecture on AWS with distributed Application Load Balancer (ALB), centralized WAF protection, and comprehensive security features.
 
-## Architecture Overview
+## 🏗️ Architecture Overview
 
-This configuration creates:
+This infrastructure creates a modern, scalable hub-and-spoke network architecture with:
 
 - **3 VPCs**: 1 shared services VPC (hub) and 2 spoke VPCs
+- **Distributed ALB**: Load balancer in Spoke1 VPC for direct access to App1
+- **Centralized WAF**: Comprehensive web application firewall protection
 - **Transit Gateway**: Central connectivity hub for inter-VPC communication
 - **Route53**: Private hosted zone with DNS resolution across all VPCs
-- **VPC Endpoints**: Centralized AWS service gateway endpoints (S3, DynamoDB) in the shared VPC
+- **VPC Endpoints**: Centralized AWS service gateway endpoints (S3, DynamoDB)
 - **Multi-AZ Deployment**: Each VPC spans 3 availability zones
+- **Security Monitoring**: VPC Flow Logs with KMS encryption
 
-## VPC Structure
+## 🎯 Current Architecture (Distributed ALB)
 
-Each VPC includes:
-- **3 Public Subnets**: One per availability zone with internet access
-- **3 Private Subnets**: One per availability zone for application workloads
-- **3 Database Subnets**: One per availability zone for database resources
-- **3 Transit Gateway Subnets**: One per availability zone for TGW attachments
+```
+Internet → ALB (Spoke1 VPC) → App1 (Nginx with WAF protection)
+Internet → Direct DNS       → App2 (Independent Apache server)
+```
 
-## Network Topology
+### Application Distribution
+
+#### **App1 (Spoke1 VPC) - Web Application**
+- **Service**: Nginx web server with security testing endpoints
+- **Access**: ALB + Direct DNS
+- **Protection**: Full WAF protection (OWASP Top 10, rate limiting, geo-blocking)
+- **URLs**:
+  - Main app: `http://<ALB-DNS>/`
+  - Health: `http://<ALB-DNS>/health`
+  - Admin: `http://<ALB-DNS>/admin`
+  - Security tests: `http://<ALB-DNS>/test-sql`, `http://<ALB-DNS>/test-xss`
+
+#### **App2 (Spoke2 VPC) - Test Instance**
+- **Service**: Apache test server
+- **Access**: Direct DNS only (`test-spoke2.gic-private.local`)
+- **Protection**: Security Groups only
+- **Purpose**: Independent connectivity and DNS testing
+
+## 🚀 Benefits of Distributed ALB Architecture
+
+### **Performance Improvements**
+- ✅ **Reduced Latency**: No Transit Gateway overhead for ALB traffic
+- ✅ **Better Health Checks**: Direct VPC routing, faster response times
+- ✅ **Improved Reliability**: No cross-VPC dependencies for primary traffic
+
+### **Architectural Benefits**
+- ✅ **Clearer Separation**: App1 (web service) vs App2 (test instance)
+- ✅ **Simplified Routing**: Direct routing, no complex path-based rules
+- ✅ **Independent Scaling**: Each app can scale independently
+
+### **Security & Operations**
+- ✅ **Centralized WAF**: Single point of security rule management
+- ✅ **Easier Troubleshooting**: Direct routing paths
+- ✅ **Reduced Complexity**: Fewer moving parts
+
+## 🛡️ AWS WAF Protection
+
+### **Rule Priority Order**
+1. **Allow Specific IPs** (Priority 1) - Bypasses all other rules
+2. **Block Specific IPs** (Priority 2) - Always blocked
+3. **Geographic Blocking** (Priority 3) - Country-based blocking
+4. **Rate Limiting** (Priority 10) - Request throttling
+5. **AWS Managed Rules** (Priority 20-24) - OWASP Top 10, SQL injection, XSS
+6. **Custom Rules** (Priority 30-31) - Application-specific rules
+
+### **Security Features**
+- **OWASP Top 10**: Core web application vulnerabilities
+- **Rate Limiting**: 2000 requests/5 minutes per IP (configurable)
+- **Geographic Blocking**: Block specific countries (CN, RU, KP)
+- **IP Allow/Block Lists**: Granular IP-based control
+- **SQL Injection Protection**: Database attack prevention
+- **XSS Protection**: Cross-site scripting prevention
+- **Admin Panel Protection**: Secure admin interfaces
+
+## 📊 Network Topology
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Spoke VPC 1   │    │  Shared VPC     │    │   Spoke VPC 2   │
 │   10.1.0.0/16   │    │  (Hub)          │    │   10.2.0.0/16   │
 │                 │    │  10.0.0.0/16    │    │                 │
+│  ┌─────────────┐│    │                 │    │                 │
+│  │ ALB + WAF   ││    │  VPC Endpoints  │    │  Test Instance  │
+│  │ App1 (Nginx)││    │  Route53        │    │  App2 (Apache)  │
+│  └─────────────┘│    │  DNS Resolver   │    │                 │
 └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
           │                      │                      │
           │                      │                      │
@@ -37,78 +97,57 @@ Each VPC includes:
                     │                           │
                     │  • Route Tables           │
                     │  • VPC Attachments        │
+                    │  • Cross-VPC Routing      │
                     └───────────────────────────┘
 ```
 
-## Key Features
-
-### Networking
-- **Hub and Spoke Topology**: Centralized shared services with isolated spoke networks
-- **Transit Gateway**: Simplified inter-VPC routing and connectivity
-- **Multi-AZ High Availability**: Resources distributed across 3 availability zones
-- **NAT Gateways**: Outbound internet access for private subnets
-
-### DNS Resolution
-- **Route53 Private Hosted Zone**: Centralized DNS resolution
-- **Cross-VPC DNS**: DNS queries resolved across all VPCs via resolver endpoints
-- **Inbound/Outbound Resolvers**: Bi-directional DNS resolution support
-
-### Security & Monitoring
-- **Network Segmentation**: Isolated spoke VPCs with controlled communication
-- **Security Groups**: Least privilege access for VPC endpoints and resolvers
-- **Private Endpoints**: S3 and DynamoDB access without internet traversal (interface endpoints removed for cost optimization)
-- **VPC Flow Logs**: Comprehensive network traffic monitoring with KMS encryption
-- **CloudWatch Integration**: Centralized logging with configurable retention periods
-
-### AWS Service Access
-- **VPC Endpoints**: Centralized access to AWS services (S3, DynamoDB)
-- **Private Connectivity**: No internet traffic for AWS service communication to S3/DynamoDB
-
-### Testing & Validation
-- **Multiple Test Instances**: Optional t2.micro instances across multiple VPCs for connectivity testing
-- **Cross-VPC Communication**: Automated testing scripts for ping, DNS, and HTTP connectivity
-- **SSM Session Manager**: Secure shell access without SSH keys or bastion hosts
-- **Built-in Web Server**: Simple HTTP server for testing cross-VPC connectivity
-- **DNS Testing**: Route53 records for testing internal DNS resolution
-- **Connectivity Test Scripts**: Pre-installed scripts for comprehensive network testing
-
-## Prerequisites
+## 🔧 Prerequisites
 
 - Terraform >= 1.12.0
 - AWS CLI configured with appropriate permissions
 - AWS Provider version 6.0.0
-- AWS credentials with sufficient permissions for EC2, VPC, Transit Gateway, Route53, and IAM
+- AWS credentials with permissions for:
+  - EC2, VPC, Transit Gateway, Route53, IAM
+  - Application Load Balancer, WAF, CloudWatch
 
-## Usage
+## 🚀 Quick Start
 
-1. **Clone the repository**:
-   ```bash
-   git clone <repository-url>
-   cd hub-spoke-shared-vpc
-   ```
+### 1. **Clone and Configure**
+```bash
+git clone <repository-url>
+cd hub-spoke-shared-vpc
 
-2. **Configure variables** (optional):
-   ```bash
-   cp terraform.tfvars.example terraform.tfvars
-   # Edit terraform.tfvars with your desired values
-   ```
+# Copy and customize configuration
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your desired values
+```
 
-3. **Initialize Terraform**:
-   ```bash
-   terraform init
-   ```
+### 2. **Deploy Infrastructure**
+```bash
+# Initialize Terraform
+terraform init
 
-4. **Plan the deployment**:
-   ```bash
-   terraform plan
-   ```
+# Review deployment plan
+terraform plan
 
-5. **Apply the configuration**:
-   ```bash
-   terraform apply
-   ```
+# Deploy (estimated time: 8-12 minutes)
+terraform apply
+```
 
-## Input Variables
+### 3. **Access Your Applications**
+```bash
+# Get ALB DNS name from outputs
+terraform output web_application_urls
+
+# Test App1 (with WAF protection)
+curl http://<ALB-DNS-NAME>/
+
+# Test WAF protection
+curl "http://<ALB-DNS-NAME>/test-sql?id=1' OR '1'='1"
+# Should be blocked by WAF
+```
+
+## 📋 Input Variables
 
 | Variable | Description | Type | Default |
 |----------|-------------|------|---------|
@@ -117,194 +156,451 @@ Each VPC includes:
 | `environment` | Environment name | `string` | `"dev"` |
 | `shared_vpc_cidr` | CIDR block for shared VPC | `string` | `"10.0.0.0/16"` |
 | `spoke_vpc_cidrs` | Map of spoke VPC CIDR blocks | `map(string)` | See variables.tf |
-| `domain_name` | Domain for private hosted zone | `string` | `"internal.local"` |
+| `domain_name` | Domain for private hosted zone | `string` | `"gic-private.local"` |
 | `enable_nat_gateway` | Enable NAT Gateway | `bool` | `true` |
-| `single_nat_gateway` | Use single NAT Gateway | `bool` | `false` |
+| `single_nat_gateway` | Use single NAT Gateway (cost optimization) | `bool` | `true` |
 | `create_test_instances` | Create test EC2 instances | `bool` | `true` |
 | `test_instance_type` | Test instance type | `string` | `"t2.micro"` |
 | `test_instance_vpcs` | List of VPCs for test instances | `list(string)` | `["spoke1", "spoke2"]` |
 | `enable_vpc_flow_logs` | Enable VPC Flow Logs | `bool` | `true` |
 | `flow_logs_retention_days` | CloudWatch retention period | `number` | `7` |
+| `enable_waf` | Enable AWS WAF protection | `bool` | `true` |
+| `waf_rate_limit` | WAF rate limit (requests/5min) | `number` | `2000` |
+| `waf_blocked_countries` | Countries to block | `list(string)` | `["CN", "RU", "KP"]` |
+| `waf_allowed_ips` | IP addresses to always allow | `list(string)` | `[]` |
+| `waf_blocked_ips` | IP addresses to always block | `list(string)` | `[]` |
 
-## Outputs
+## 📤 Key Outputs
 
 | Output | Description |
 |--------|-------------|
+| `web_application_urls` | URLs to access App1 through ALB |
+| `direct_instance_access` | Direct DNS access to both apps |
+| `alb_dns_name` | ALB DNS name for App1 |
+| `waf_web_acl_arn` | WAF Web ACL ARN |
 | `vpc_ids` | Map of VPC names to IDs |
 | `transit_gateway_id` | Transit Gateway ID |
 | `route53_private_zone_id` | Private hosted zone ID |
-| `vpc_endpoint_ids` | Map of VPC endpoint IDs (S3, DynamoDB) |
-| `vpc_flow_logs` | VPC Flow Logs configuration and KMS details |
-| `test_instances` | Map of test instances information by VPC |
-| `connectivity_test_commands` | Commands for testing cross-VPC connectivity |
+| `vpc_flow_logs` | VPC Flow Logs configuration |
+| `test_instances` | Map of test instances information |
+| `connectivity_test_commands` | Commands for testing connectivity |
 
-## CIDR Allocation
-
-Default CIDR allocation per VPC:
+## 🌐 CIDR Allocation
 
 ### Shared VPC (10.0.0.0/16)
-- Public subnets: 10.0.1.0/24, 10.0.2.0/24, 10.0.3.0/24
-- Private subnets: 10.0.11.0/24, 10.0.12.0/24, 10.0.13.0/24
-- Database subnets: 10.0.21.0/24, 10.0.22.0/24, 10.0.23.0/24
-- TGW subnets: 10.0.31.0/24, 10.0.32.0/24, 10.0.33.0/24
+- **Public subnets**: 10.0.1.0/24, 10.0.2.0/24, 10.0.3.0/24
+- **Private subnets**: 10.0.11.0/24, 10.0.12.0/24, 10.0.13.0/24
+- **Database subnets**: 10.0.21.0/24, 10.0.22.0/24, 10.0.23.0/24
+- **TGW subnets**: 10.0.31.0/24, 10.0.32.0/24, 10.0.33.0/24
 
-### Spoke VPC 1 (10.1.0.0/16)
-- Public subnets: 10.1.1.0/24, 10.1.2.0/24, 10.1.3.0/24
-- Private subnets: 10.1.11.0/24, 10.1.12.0/24, 10.1.13.0/24
-- Database subnets: 10.1.21.0/24, 10.1.22.0/24, 10.1.23.0/24
-- TGW subnets: 10.1.31.0/24, 10.1.32.0/24, 10.1.33.0/24
+### Spoke VPC 1 (10.1.0.0/16) - App1
+- **Public subnets**: 10.1.1.0/24, 10.1.2.0/24, 10.1.3.0/24 (ALB placement)
+- **Private subnets**: 10.1.11.0/24, 10.1.12.0/24, 10.1.13.0/24 (App1 instance)
+- **Database subnets**: 10.1.21.0/24, 10.1.22.0/24, 10.1.23.0/24
+- **TGW subnets**: 10.1.31.0/24, 10.1.32.0/24, 10.1.33.0/24
 
-### Spoke VPC 2 (10.2.0.0/16)
-- Public subnets: 10.2.1.0/24, 10.2.2.0/24, 10.2.3.0/24
-- Private subnets: 10.2.11.0/24, 10.2.12.0/24, 10.2.13.0/24
-- Database subnets: 10.2.21.0/24, 10.2.22.0/24, 10.2.23.0/24
-- TGW subnets: 10.2.31.0/24, 10.2.32.0/24, 10.2.33.0/24
+### Spoke VPC 2 (10.2.0.0/16) - App2
+- **Public subnets**: 10.2.1.0/24, 10.2.2.0/24, 10.2.3.0/24
+- **Private subnets**: 10.2.11.0/24, 10.2.12.0/24, 10.2.13.0/24 (App2 instance)
+- **Database subnets**: 10.2.21.0/24, 10.2.22.0/24, 10.2.23.0/24
+- **TGW subnets**: 10.2.31.0/24, 10.2.32.0/24, 10.2.33.0/24
 
-## Routing
+## 🔀 Routing Architecture
 
-### Public Subnets
+### **Public Subnets**
 - Default route (0.0.0.0/0) → Internet Gateway
+- Cross-VPC routes → Transit Gateway
 
-### Private Subnets
+### **Private Subnets**
 - Default route (0.0.0.0/0) → NAT Gateway
 - Cross-VPC routes → Transit Gateway
 
-### Database Subnets
+### **Database Subnets**
 - Cross-VPC routes only → Transit Gateway
-- No internet access
+- No internet access (secure)
 
-### Transit Gateway Routing
-- **Shared Route Table**: Associated with shared VPC, propagates spoke VPC routes
-- **Spoke Route Table**: Associated with spoke VPCs, propagates shared VPC routes
+### **Transit Gateway Routing**
+- **Shared Route Table**: Associated with shared VPC
+- **Spoke Route Table**: Associated with spoke VPCs
+- **Propagation**: Automatic route propagation between VPCs
 
-## DNS Resolution
+## 🔒 Security Features
 
-- **Private Hosted Zone**: `internal.local` (configurable)
-- **Inbound Resolver**: Accepts DNS queries from spoke VPCs
-- **Outbound Resolver**: Forwards queries to external DNS servers
-- **Cross-VPC Resolution**: All VPCs can resolve names in the private zone
+### **Network Security**
+- **Security Groups**: Least privilege access control
+- **ICMP Disabled**: Ping protocol blocked for enhanced security
+- **NACLs**: Additional subnet-level protection
+- **Private Endpoints**: S3 and DynamoDB access without internet
+- **VPC Flow Logs**: Network traffic monitoring with KMS encryption
 
-## Security Considerations
+### **Application Security**
+- **WAF Protection**: OWASP Top 10, rate limiting, geo-blocking
+- **SSL/TLS Ready**: HTTPS support (certificate not included)
+- **Admin Panel Protection**: Secure administrative interfaces
 
-1. **Network Segmentation**: Spoke VPCs are isolated from each other
-2. **Least Privilege**: Security groups allow only necessary traffic
-3. **Private Endpoints**: AWS service traffic stays within AWS network
-4. **Transit Gateway Route Tables**: Control inter-VPC communication
+### **Access Control**
+- **SSM Session Manager**: Secure shell access without SSH keys
+- **IAM Roles**: Least privilege EC2 instance roles
+- **KMS Encryption**: VPC Flow Logs and CloudWatch logs
 
-## Cost Optimization
+## 🧪 Testing & Validation
 
-- NAT Gateways can be configured as single or per-AZ
-- Gateway VPC endpoints (S3, DynamoDB) reduce data transfer costs and are free
-- Interface VPC endpoints removed to reduce costs (~$22/month savings)
-- Transit Gateway consolidates connectivity
+### **1. Connect to Test Instances**
 
-## Customization
-
-The configuration is highly customizable:
-
-1. **Modify CIDR blocks** in `terraform.tfvars`
-2. **Adjust subnet counts** by changing the AZ count
-3. **Add/remove VPC endpoints** in the locals (currently includes S3 and DynamoDB gateway endpoints)
-4. **Configure additional security groups** as needed
-
-## Testing Connectivity
-
-After deployment, you can test the infrastructure:
-
-### 1. Connect to Test Instances (Multiple Options)
-
-#### **Option A: SSM Session Manager (Recommended - No SSH needed)**
+#### **Option A: SSM Session Manager (Recommended)**
 ```bash
-# Get instances information
+# Get instance IDs
 terraform output test_instances
 
-# Connect directly via AWS CLI (most convenient)
-aws ssm start-session --target <INSTANCE_ID> --region ap-southeast-1
+# Connect to App1 (Spoke1)
+aws ssm start-session --target <SPOKE1_INSTANCE_ID> --region ap-southeast-1
 
-# Or connect via AWS Console
-# Go to: EC2 Console → Instances → Select Instance → Connect → Session Manager
+# Connect to App2 (Spoke2)
+aws ssm start-session --target <SPOKE2_INSTANCE_ID> --region ap-southeast-1
 ```
 
-#### **Option B: SSH via SSM Port Forwarding (if you prefer SSH)**
+#### **Option B: SSH via SSM Port Forwarding**
 ```bash
-# Forward local port 2222 to instance SSH port 22
+# Forward port for SSH
 aws ssm start-session --target <INSTANCE_ID> \
     --document-name AWS-StartPortForwardingSession \
     --parameters '{"portNumber":["22"],"localPortNumber":["2222"]}' \
     --region ap-southeast-1
 
-# In another terminal, SSH via localhost
+# SSH via localhost
 ssh -i ~/.ssh/your-key.pem -p 2222 ec2-user@localhost
 ```
 
-#### **Option C: Instance Connect Endpoint (Alternative)**
-```bash
-# Direct SSH without permanent EIP (AWS feature)
-aws ec2-instance-connect send-ssh-public-key \
-    --instance-id <INSTANCE_ID> \
-    --instance-os-user ec2-user \
-    --ssh-public-key file://~/.ssh/id_rsa.pub \
-    --region ap-southeast-1
+### **2. Test ALB and WAF Protection**
 
-# Then SSH directly
-ssh ec2-user@<PRIVATE_IP>
+#### **App1 Testing (via ALB)**
+```bash
+# Get ALB DNS name
+ALB_DNS=$(terraform output -raw alb_dns_name)
+
+# Test normal access
+curl http://$ALB_DNS/
+
+# Test health check
+curl http://$ALB_DNS/health
+
+# Test WAF protection (should be blocked)
+curl "http://$ALB_DNS/test-sql?id=1' OR '1'='1"
+curl "http://$ALB_DNS/admin"
+curl "http://$ALB_DNS/test-xss?input=<script>alert('xss')</script>"
+
+# Test rate limiting (run multiple times quickly)
+for i in {1..100}; do curl http://$ALB_DNS/; done
 ```
 
-### 2. Test Cross-VPC Connectivity
+#### **App2 Testing (Direct DNS)**
 ```bash
-# Inside any test instance, run the comprehensive connectivity test
+# From within any instance
+curl http://test-spoke2.gic-private.local/
+
+# DNS resolution test
+nslookup test-spoke2.gic-private.local
+```
+
+### **3. Test Cross-VPC Connectivity**
+```bash
+# From spoke2 instance, test connectivity to spoke1
+# ping -c 3 test-spoke1.gic-private.local  # ICMP disabled for security
+curl http://test-spoke1.gic-private.local/
+nc -zv test-spoke1.gic-private.local 80  # Alternative TCP connectivity test
+
+# From spoke1 instance, test connectivity to spoke2
+# ping -c 3 test-spoke2.gic-private.local  # ICMP disabled for security
+curl http://test-spoke2.gic-private.local/
+nc -zv test-spoke2.gic-private.local 80  # Alternative TCP connectivity test
+
+# Run comprehensive connectivity test (ping tests are disabled)
 sudo -u ec2-user /home/ec2-user/test-connectivity.sh
-
-# Or test individual components manually:
-# Test DNS resolution between VPCs
-nslookup test-spoke1.internal.local
-nslookup test-spoke2.internal.local
-
-# Test ping connectivity between VPCs  
-ping -c 3 test-spoke1.internal.local
-ping -c 3 test-spoke2.internal.local
-
-# Test HTTP connectivity between instances
-curl http://test-spoke1.internal.local
-curl http://test-spoke2.internal.local
 ```
 
-### 3. Monitor VPC Flow Logs
+### **4. Monitor WAF Activity**
 ```bash
-# View VPC Flow Logs in CloudWatch
-aws logs describe-log-groups --log-group-name-prefix "/aws/vpc/flowlogs"
+# View WAF logs
+aws logs describe-log-groups --log-group-name-prefix "aws-waf-logs"
 
-# Get recent flow logs for a specific VPC
-aws logs tail /aws/vpc/flowlogs/spoke1 --follow
+# Get recent WAF logs
+aws logs tail aws-waf-logs-hub-spoke-vpc --follow
+
+# CloudWatch metrics
+aws cloudwatch get-metric-statistics \
+    --namespace AWS/WAFV2 \
+    --metric-name BlockedRequests \
+    --dimensions Name=WebACL,Value=hub-spoke-vpc-web-acl \
+    --start-time 2024-01-01T00:00:00Z \
+    --end-time 2024-01-01T23:59:59Z \
+    --period 3600 \
+    --statistics Sum
 ```
 
-### 3. Test VPC Endpoints
+### **5. Test VPC Endpoints**
 ```bash
-# Test S3 endpoint (private gateway endpoint)
+# Test S3 endpoint (should use private gateway)
 aws s3 ls
 
-# Test DynamoDB endpoint (private gateway endpoint)
+# Test DynamoDB endpoint (should use private gateway)
 aws dynamodb list-tables
 
-# Note: SSM uses public endpoints (no private interface endpoints configured)
-aws ssm get-parameter --name "/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2"
+# Check endpoint routing
+aws ec2 describe-route-tables --filters "Name=vpc-id,Values=<VPC_ID>"
 ```
 
-## Clean Up
+## 📊 Monitoring & Observability
 
-To destroy the infrastructure:
+### **CloudWatch Metrics**
+- **ALB Metrics**: Request count, latency, error rates
+- **WAF Metrics**: Blocked/allowed requests, rule matches
+- **VPC Flow Logs**: Network traffic patterns
+- **EC2 Metrics**: Instance health and performance
 
+### **Useful CloudWatch Queries**
+
+#### **Top Blocked IPs**
+```sql
+fields @timestamp, httpRequest.clientIP, terminatingRuleId
+| filter action = "BLOCK"
+| stats count() by httpRequest.clientIP
+| sort count desc
+| limit 20
+```
+
+#### **Geographic Traffic Distribution**
+```sql
+fields @timestamp, httpRequest.country
+| filter action = "ALLOW"
+| stats count() by httpRequest.country
+| sort count desc
+```
+
+#### **Rate Limit Violations**
+```sql
+fields @timestamp, httpRequest.clientIP, terminatingRuleId
+| filter terminatingRuleId = "RateLimitRule"
+| sort @timestamp desc
+```
+
+## 💰 Cost Optimization
+
+### **Monthly Cost Estimate (~$50-70)**
+- **ALB**: ~$16/month (single ALB)
+- **WAF**: ~$1/month + $0.60 per million requests
+- **NAT Gateway**: ~$32/month (single NAT for cost optimization)
+- **Transit Gateway**: ~$36/month (1 TGW + 3 attachments)
+- **EC2 Instances**: Free tier eligible (2x t2.micro)
+- **VPC Flow Logs**: ~$0.50/GB ingested
+
+### **Cost Optimization Features**
+- ✅ **Single NAT Gateway**: Saves ~$64/month vs multi-AZ
+- ✅ **Gateway Endpoints**: Free S3/DynamoDB access
+- ✅ **No Interface Endpoints**: Saves ~$22/month
+- ✅ **Short Log Retention**: 7 days for VPC Flow Logs
+- ✅ **t2.micro Instances**: Free tier eligible
+
+### **Scaling Costs**
+- **Additional ALBs**: ~$16/month each
+- **Multi-AZ NAT**: +$64/month for high availability
+- **Larger Instances**: t3.small (~$15/month), t3.medium (~$30/month)
+
+## 🔧 Customization Options
+
+### **Network Customization**
+```hcl
+# Modify CIDR blocks
+shared_vpc_cidr = "172.16.0.0/16"
+spoke_vpc_cidrs = {
+  spoke1 = "172.17.0.0/16"
+  spoke2 = "172.18.0.0/16"
+}
+
+# Add more spoke VPCs
+spoke_vpc_cidrs = {
+  spoke1 = "10.1.0.0/16"
+  spoke2 = "10.2.0.0/16" 
+  spoke3 = "10.3.0.0/16"
+  spoke4 = "10.4.0.0/16"
+}
+```
+
+### **Security Customization**
+```hcl
+# Strict rate limiting
+waf_rate_limit = 500
+
+# Geographic restrictions
+waf_blocked_countries = ["CN", "RU", "KP", "IR", "SY"]
+
+# IP allowlist for your organization
+waf_allowed_ips = [
+  "203.0.113.0/24",    # Office network
+  "198.51.100.0/24"    # Datacenter
+]
+```
+
+### **Instance Customization**
+```hcl
+# Different instance types
+test_instance_type = "t3.small"
+
+# More test instances
+test_instance_vpcs = ["spoke1", "spoke2", "spoke3"]
+
+# Enable bastion host
+create_bastion_host = true
+```
+
+## 🛠️ Troubleshooting
+
+### **Common Issues**
+
+#### **ALB Health Check Failures**
 ```bash
-terraform destroy
+# Check target group health
+aws elbv2 describe-target-health --target-group-arn <TG_ARN>
+
+# Check security group rules
+aws ec2 describe-security-groups --group-ids <ALB_SG_ID>
+
+# Test connectivity from ALB subnet to target
+curl -H "Host: internal" http://<TARGET_IP>/health
 ```
 
-## Support
+#### **WAF Rule Issues**
+```bash
+# Check WAF logs for blocked requests
+aws logs filter-log-events --log-group-name aws-waf-logs-hub-spoke-vpc
+
+# Test specific rule
+curl -H "User-Agent: BadBot" http://<ALB_DNS>/
+
+# Temporarily disable rule for testing
+# Set rule action to "count" instead of "block"
+```
+
+#### **DNS Resolution Issues**
+```bash
+# Test Route53 resolver
+nslookup test-spoke1.gic-private.local
+
+# Check resolver endpoints
+aws route53resolver describe-resolver-endpoints
+
+# Test cross-VPC DNS
+dig @<RESOLVER_IP> test-spoke1.gic-private.local
+```
+
+#### **Cross-VPC Connectivity Issues**
+```bash
+# Check Transit Gateway route tables
+aws ec2 describe-transit-gateway-route-tables
+
+# Test Transit Gateway routes
+aws ec2 search-transit-gateway-routes --transit-gateway-route-table-id <TGW_RT_ID>
+
+# Check VPC route tables
+aws ec2 describe-route-tables --filters "Name=vpc-id,Values=<VPC_ID>"
+```
+
+## 🚀 Advanced Features
+
+### **HTTPS Support**
+```hcl
+# Add SSL certificate to ALB
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.main.arn
+  port              = "443"
+  protocol          = "HTTPS"
+  ssl_policy        = "ELBSecurityPolicy-TLS-1-2-2017-01"
+  certificate_arn   = aws_acm_certificate.cert.arn
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.spoke1_app.arn
+  }
+}
+```
+
+### **Custom Domain Names**
+```hcl
+# Route53 alias record
+resource "aws_route53_record" "app" {
+  zone_id = aws_route53_zone.main.zone_id
+  name    = "app.example.com"
+  type    = "A"
+
+  alias {
+    name                   = aws_lb.main.dns_name
+    zone_id               = aws_lb.main.zone_id
+    evaluate_target_health = true
+  }
+}
+```
+
+### **Multi-Region Deployment**
+```hcl
+# Provider for secondary region
+provider "aws" {
+  alias  = "secondary"
+  region = "us-west-2"
+}
+
+# Cross-region resources
+resource "aws_vpc" "secondary" {
+  provider   = aws.secondary
+  cidr_block = "10.10.0.0/16"
+}
+```
+
+## 🧹 Clean Up
+
+### **Destroy Infrastructure**
+```bash
+# Review what will be destroyed
+terraform plan -destroy
+
+# Destroy all resources
+terraform destroy
+
+# Confirm destruction
+# Type: yes
+```
+
+### **Partial Cleanup**
+```bash
+# Disable WAF (reduce costs)
+terraform apply -var="enable_waf=false"
+
+# Remove test instances
+terraform apply -var="create_test_instances=false"
+
+# Use multi-AZ NAT (increase availability)
+terraform apply -var="single_nat_gateway=false"
+```
+
+## 📖 Additional Resources
+
+- [AWS Transit Gateway Documentation](https://docs.aws.amazon.com/transit-gateway/)
+- [AWS WAF Developer Guide](https://docs.aws.amazon.com/waf/)
+- [Application Load Balancer User Guide](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/)
+- [VPC Flow Logs User Guide](https://docs.aws.amazon.com/vpc/latest/userguide/flow-logs.html)
+- [Route53 Resolver Documentation](https://docs.aws.amazon.com/route53/latest/developerguide/resolver.html)
+
+## 🤝 Support
 
 For issues or questions:
 1. Check the Terraform plan output for any errors
-2. Verify AWS permissions and quota limits
-3. Review CloudFormation events in AWS console
+2. Review AWS service quotas and limits
+3. Validate IAM permissions
+4. Check CloudWatch logs for detailed error messages
+5. Use AWS CLI commands provided in troubleshooting section
 
-## License
+## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
+
+**🎉 Ready to Deploy!** This infrastructure provides a production-ready, secure, and scalable hub-and-spoke network architecture with modern security features and cost optimization.
