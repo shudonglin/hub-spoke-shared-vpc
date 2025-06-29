@@ -111,23 +111,7 @@ variable "flow_logs_retention_days" {
   }
 }
 
-variable "create_bastion_host" {
-  description = "Create a bastion host for SSH access to test instances"
-  type        = bool
-  default     = false
-}
 
-variable "bastion_instance_type" {
-  description = "Instance type for the bastion host"
-  type        = string
-  default     = "t2.micro"
-}
-
-variable "ssh_allowed_cidr_blocks" {
-  description = "CIDR blocks allowed to SSH to bastion host"
-  type        = list(string)
-  default     = ["0.0.0.0/0"]  # Change this to your IP for security
-}
 
 variable "enable_spoke_to_spoke_communication" {
   description = "Enable direct communication between spoke VPCs (full mesh)"

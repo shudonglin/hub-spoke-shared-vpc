@@ -323,6 +323,16 @@ resource "aws_cloudwatch_event_rule" "guardduty_findings" {
     source      = ["aws.guardduty"]
     detail-type = ["GuardDuty Finding"]
   })
+
+  depends_on = [
+    aws_sns_topic.alerts,
+    aws_sns_topic_policy.alerts,
+    aws_guardduty_detector.main
+  ]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-guardduty-rule"
+  })
 }
 
 resource "aws_cloudwatch_event_target" "sns" {

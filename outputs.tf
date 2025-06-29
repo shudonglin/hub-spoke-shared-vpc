@@ -184,27 +184,7 @@ output "connectivity_test_commands" {
   } : null
 }
 
-output "bastion_host" {
-  description = "Bastion host information"
-  value = var.create_bastion_host ? {
-    id          = aws_instance.bastion[0].id
-    public_ip   = aws_eip.bastion_eip[0].public_ip
-    private_ip  = aws_instance.bastion[0].private_ip
-    dns_name    = "bastion.${var.domain_name}"
-    ssh_command = "ssh -i ~/.ssh/your-key.pem ec2-user@${aws_eip.bastion_eip[0].public_ip}"
-    usage_info = [
-      "# SSH to bastion host:",
-      "ssh -i ~/.ssh/your-key.pem ec2-user@${aws_eip.bastion_eip[0].public_ip}",
-      "",
-      "# From bastion, SSH to test instances:",
-      "ssh ec2-user@test-spoke1.${var.domain_name}",
-      "ssh ec2-user@test-spoke2.${var.domain_name}",
-      "",
-      "# Or use SSM from bastion:",
-      "aws ssm start-session --target <INSTANCE_ID>"
-    ]
-  } : null
-}
+
 
 # ===============================
 # WAF Outputs
@@ -492,7 +472,7 @@ output "security_compliance_summary" {
     }
     cost_optimization = {
       single_nat_gateway = var.single_nat_gateway ? "✅ Enabled (~$135/month savings)" : "❌ Disabled"
-      bastion_host = var.create_bastion_host ? "❌ Enabled (~$8/month cost)" : "✅ Disabled (using SSM)"
+      ssm_access = "✅ Using SSM Session Manager (no bastion needed)"
     }
   }
 } 

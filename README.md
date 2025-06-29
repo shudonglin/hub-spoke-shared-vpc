@@ -149,6 +149,61 @@ curl "http://<ALB-DNS-NAME>/test-sql?id=1' OR '1'='1"
 # Should be blocked by WAF
 ```
 
+## 📂 Instance Initialization Scripts
+
+This infrastructure includes external initialization scripts for EC2 instances, located in the `scripts/` directory. These scripts avoid the 16KB user data limit and improve maintainability.
+
+### **Scripts Directory Structure**
+```
+scripts/
+├── spoke1-init.sh     # nginx web server setup for App1
+└── spoke2-init.sh     # Apache test server setup for App2
+```
+
+### **spoke1-init.sh (App1 - Web Application)**
+- **Purpose**: Initializes the spoke1 test instance with nginx web server
+- **Services**: nginx web server, CloudWatch agent
+- **Use Case**: Primary web application behind ALB with WAF protection
+- **Endpoints**: Health checks, admin panel, API endpoints for WAF testing
+- **Features**:
+  - Comprehensive web server with security test endpoints
+  - CloudWatch monitoring integration
+  - Cross-VPC connectivity testing utilities
+  - DNS diagnostics and network testing tools
+
+### **spoke2-init.sh (App2 - Test Instance)**
+- **Purpose**: Initializes the spoke2 test instance with Apache web server
+- **Services**: Apache web server, CloudWatch agent
+- **Use Case**: Independent connectivity testing instance
+- **Endpoints**: Health checks, system info, basic web server
+- **Features**:
+  - Simple Apache web server for connectivity testing
+  - CloudWatch monitoring integration
+  - Cross-VPC communication testing
+  - DNS resolution testing
+
+### **Template Variables**
+The scripts use Terraform template variables for dynamic configuration:
+- `${DOMAIN_NAME}` - Private DNS domain name (e.g., "gic-private.local")
+
+### **Benefits of External Scripts**
+1. **Avoids 16KB user data limit** - Complex initialization scripts can exceed EC2's inline user data size limit
+2. **Better maintainability** - Scripts can be version controlled and easily modified
+3. **Improved readability** - Separates infrastructure code from application setup
+4. **Easier debugging** - Scripts can be tested independently
+5. **Modular architecture** - Each VPC gets its own specific initialization
+
+### **Usage in Terraform**
+The scripts are automatically referenced by Terraform's `templatefile()` function:
+
+```hcl
+user_data_base64 = base64encode(templatefile("${path.module}/scripts/${each.key}-init.sh", {
+  DOMAIN_NAME = var.domain_name
+}))
+```
+
+The scripts run automatically when instances are launched and include comprehensive setup for both applications and monitoring.
+
 ## 📋 Input Variables
 
 | Variable | Description | Type | Default |
