@@ -1,0 +1,169 @@
+# ===============================
+# Basic Configuration
+# ===============================
+
+# AWS Region where resources will be created
+aws_region = "ap-southeast-1"
+
+# Project name used as prefix for resource names
+project_name = "my-hub-spoke"
+
+# Environment name (dev, staging, prod, etc.)
+environment = "dev"
+
+# ===============================
+# Network Configuration
+# ===============================
+
+# CIDR block for the shared services VPC (hub)
+shared_vpc_cidr = "10.0.0.0/16"
+
+# CIDR blocks for spoke VPCs
+spoke_vpc_cidrs = {
+  spoke1 = "10.1.0.0/16"
+  spoke2 = "10.2.0.0/16"
+}
+
+# Specific availability zones to use (optional)
+# If not specified, will use first 3 AZs in the region
+# availability_zones = ["ap-southeast-1a", "ap-southeast-1b", "ap-southeast-1c"]
+
+# ===============================
+# DNS Configuration
+# ===============================
+
+# Domain name for the private hosted zone
+domain_name = "internal.local"
+
+# ===============================
+# NAT Gateway Configuration
+# ===============================
+
+# Enable NAT Gateways for outbound internet access from private subnets
+enable_nat_gateway = true
+
+# Use single NAT Gateway for all AZs (cost optimization)
+# Set to false for high availability (one NAT Gateway per AZ)
+single_nat_gateway = true
+
+# ===============================
+# VPC DNS Settings
+# ===============================
+
+# Enable DNS hostnames in VPCs
+enable_dns_hostnames = true
+
+# Enable DNS support in VPCs
+enable_dns_support = true
+
+# ===============================
+# Tagging
+# ===============================
+
+# Additional tags to apply to all resources
+tags = {
+  Owner       = "Platform Team"
+  Environment = "dev"
+  Project     = "Hub-Spoke-Network"
+  CostCenter  = "12345"
+  Terraform   = "true"
+}
+
+# ===============================
+# Test Instances Configuration
+# ===============================
+
+# Create test EC2 instances for connectivity testing
+create_test_instances = true
+
+# Instance type for the test instances
+test_instance_type = "t2.micro"
+
+# List of VPCs to deploy test instances in
+# Options: ["shared", "spoke1", "spoke2"] or any combination
+test_instance_vpcs = ["spoke1", "spoke2"]
+
+# ===============================
+# VPC Flow Logs Configuration
+# ===============================
+
+# Enable VPC Flow Logs for all VPCs
+enable_vpc_flow_logs = true
+
+# CloudWatch Logs retention period for VPC Flow Logs (days)
+# Valid values: 1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653
+flow_logs_retention_days = 7
+
+# ===============================
+# Bastion Host Configuration (Optional)
+# ===============================
+
+# Create a bastion host for SSH access (uses 1 additional EIP)
+create_bastion_host = false
+
+# Instance type for the bastion host
+bastion_instance_type = "t2.micro"
+
+# CIDR blocks allowed to SSH to bastion host
+# IMPORTANT: Change this to your public IP for security!
+# Example: ["1.2.3.4/32"] for your specific IP
+ssh_allowed_cidr_blocks = ["0.0.0.0/0"]
+
+# ===============================
+# Transit Gateway Configuration
+# ===============================
+
+# Enable direct communication between spoke VPCs
+# Set to false for strict hub-spoke model (all traffic via shared VPC)
+enable_spoke_to_spoke_communication = true
+
+# ===============================
+# WAF Configuration (Optional)
+# ===============================
+
+# Enable AWS WAF with Application Load Balancer
+enable_waf = true
+
+# Rate limiting (requests per 5 minutes from same IP)
+waf_rate_limit = 2000
+
+# Geographic blocking (ISO 3166-1 alpha-2 country codes)
+waf_blocked_countries = [
+  # "CN",  # China
+  # "RU",  # Russia
+  # "KP",  # North Korea
+  # "IR",  # Iran
+]
+
+# IP allowlist (always allow these IPs)
+waf_allowed_ips = [
+  # "203.0.113.0/24",  # Your office IP range
+  # "198.51.100.0/24", # Your datacenter IP range
+]
+
+# IP blocklist (always block these IPs)
+waf_blocked_ips = [
+  # "192.0.2.0/24",    # Known malicious IP range
+]
+
+# AWS Managed Rule Groups
+enable_aws_managed_rules = {
+  core_rule_set           = true   # OWASP Top 10 protection
+  admin_protection        = true   # Admin interface protection  
+  known_bad_inputs        = true   # Known bad signatures
+  sql_injection          = true   # SQL injection protection
+  linux_operating_system = true   # Linux-specific protections
+  unix_operating_system  = false  # Unix-specific protections
+}
+
+# ===============================
+# Security & VPC Endpoints Configuration
+# ===============================
+
+# Enhanced security features (NACLs, additional security groups)
+enable_enhanced_security = true
+
+# VPC Endpoints for SSM (EXPENSIVE - adds ~$63-135/month)
+# Only enable for production environments requiring maximum security
+# Your instances can already access SSM through NAT Gateway for FREE
+enable_vpc_endpoints = false 
