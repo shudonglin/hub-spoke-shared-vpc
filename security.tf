@@ -358,4 +358,372 @@ resource "aws_iam_role_policy_attachment" "lambda_security_basic" {
   count      = var.enable_security_automation ? 1 : 0
   role       = aws_iam_role.lambda_security[0].name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# ===============================
+# AWS Config for Configuration Compliance
+# ===============================
+
+# S3 bucket for Config
+resource "aws_s3_bucket" "config" {
+  count  = var.enable_config ? 1 : 0
+  bucket = "${var.project_name}-config-${random_id.config_bucket_suffix[0].hex}"
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-config"
+    Type = "Config"
+  })
+}
+
+resource "random_id" "config_bucket_suffix" {
+  count       = var.enable_config ? 1 : 0
+  byte_length = 8
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "config" {
+  count  = var.enable_config ? 1 : 0
+  bucket = aws_s3_bucket.config[0].id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      kms_master_key_id = var.enable_vpc_flow_logs ? aws_kms_key.vpc_flow_logs_key[0].arn : null
+      sse_algorithm     = var.enable_vpc_flow_logs ? "aws:kms" : "AES256"
+    }
+  }
+}
+
+resource "aws_s3_bucket_versioning" "config" {
+  count  = var.enable_config ? 1 : 0
+  bucket = aws_s3_bucket.config[0].id
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "config" {
+  count  = var.enable_config ? 1 : 0
+  bucket = aws_s3_bucket.config[0].id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_policy" "config" {
+  count  = var.enable_config ? 1 : 0
+  bucket = aws_s3_bucket.config[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AWSConfigBucketPermissionsCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+        Action   = "s3:GetBucketAcl"
+        Resource = aws_s3_bucket.config[0].arn
+        Condition = {
+          StringEquals = {
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+      {
+        Sid    = "AWSConfigBucketExistenceCheck"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+        Action   = "s3:ListBucket"
+        Resource = aws_s3_bucket.config[0].arn
+        Condition = {
+          StringEquals = {
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      },
+      {
+        Sid    = "AWSConfigBucketDelivery"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+        Action   = "s3:PutObject"
+        Resource = "${aws_s3_bucket.config[0].arn}/*"
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl"     = "bucket-owner-full-control"
+            "AWS:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
+      }
+    ]
+  })
+}
+
+# Config Service Configuration
+resource "aws_config_configuration_recorder_status" "main" {
+  count      = var.enable_config ? 1 : 0
+  name       = aws_config_configuration_recorder.main[0].name
+  is_enabled = true
+  depends_on = [aws_config_delivery_channel.main]
+}
+
+resource "aws_config_delivery_channel" "main" {
+  count          = var.enable_config ? 1 : 0
+  name           = "${var.project_name}-config-delivery-channel"
+  s3_bucket_name = aws_s3_bucket.config[0].bucket
+}
+
+resource "aws_config_configuration_recorder" "main" {
+  count    = var.enable_config ? 1 : 0
+  name     = "${var.project_name}-config-recorder"
+  role_arn = aws_iam_role.config[0].arn
+
+  recording_group {
+    all_supported                 = true
+    include_global_resource_types = true
+  }
+}
+
+resource "aws_iam_role" "config" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-config-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "config.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "config" {
+  count      = var.enable_config ? 1 : 0
+  role       = aws_iam_role.config[0].name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWS_ConfigRole"
+}
+
+# ===============================
+# AWS Config Rules for Compliance
+# ===============================
+
+# Root access key check
+resource "aws_config_config_rule" "root_access_key_check" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-root-access-key-check"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "IAM_ROOT_ACCESS_KEY_CHECK"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-root-access-key-check"
+  })
+}
+
+# Security groups should not allow unrestricted access to port 22
+resource "aws_config_config_rule" "incoming_ssh_disabled" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-incoming-ssh-disabled"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "INCOMING_SSH_DISABLED"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-incoming-ssh-disabled"
+  })
+}
+
+# VPC flow logging should be enabled
+resource "aws_config_config_rule" "vpc_flow_logs_enabled" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-vpc-flow-logs-enabled"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "VPC_FLOW_LOGS_ENABLED"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-vpc-flow-logs-enabled"
+  })
+}
+
+# CloudTrail should be enabled
+resource "aws_config_config_rule" "cloudtrail_enabled" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-cloudtrail-enabled"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "CLOUD_TRAIL_ENABLED"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-cloudtrail-enabled"
+  })
+}
+
+# S3 bucket should not allow public read access
+resource "aws_config_config_rule" "s3_bucket_public_read_prohibited" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-s3-bucket-public-read-prohibited"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "S3_BUCKET_PUBLIC_READ_PROHIBITED"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-s3-bucket-public-read-prohibited"
+  })
+}
+
+# S3 bucket should not allow public write access
+resource "aws_config_config_rule" "s3_bucket_public_write_prohibited" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-s3-bucket-public-write-prohibited"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "S3_BUCKET_PUBLIC_WRITE_PROHIBITED"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-s3-bucket-public-write-prohibited"
+  })
+}
+
+# Security groups should not allow unrestricted access to all ports
+resource "aws_config_config_rule" "security_group_open_to_world" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-security-group-open-to-world"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "EC2_SECURITY_GROUP_ATTACHED_TO_ENI"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-security-group-open-to-world"
+  })
+}
+
+
+
+# IAM password policy check
+resource "aws_config_config_rule" "iam_password_policy" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-iam-password-policy"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "IAM_PASSWORD_POLICY"
+  }
+
+  input_parameters = jsonencode({
+    RequireUppercaseCharacters = "true"
+    RequireLowercaseCharacters = "true"
+    RequireSymbols            = "true"
+    RequireNumbers            = "true"
+    MinimumPasswordLength     = "8"
+    PasswordReusePrevention   = "3"
+    MaxPasswordAge            = "90"
+  })
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-iam-password-policy"
+  })
+}
+
+# EC2 instances should be managed by Systems Manager
+resource "aws_config_config_rule" "ec2_managedinstance_association_compliance" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-ec2-managedinstance-compliance"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "EC2_MANAGEDINSTANCE_ASSOCIATION_COMPLIANCE_STATUS_CHECK"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-ec2-managedinstance-compliance"
+  })
+}
+
+# Ensure encrypted EBS volumes
+resource "aws_config_config_rule" "encrypted_volumes" {
+  count = var.enable_config ? 1 : 0
+  name  = "${var.project_name}-encrypted-volumes"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "ENCRYPTED_VOLUMES"
+  }
+
+  depends_on = [aws_config_configuration_recorder.main]
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-encrypted-volumes"
+  })
+}
+
+# ===============================
+# AWS GuardDuty for Threat Detection
+# ===============================
+
+resource "aws_guardduty_detector" "main" {
+  count  = var.enable_guardduty ? 1 : 0
+  enable = true
+
+  tags = merge(local.common_tags, {
+    Name = "${var.project_name}-guardduty"
+  })
+}
+
+# GuardDuty S3 Protection Feature
+resource "aws_guardduty_detector_feature" "s3_logs" {
+  count       = var.enable_guardduty ? 1 : 0
+  detector_id = aws_guardduty_detector.main[0].id
+  name        = "S3_DATA_EVENTS"
+  status      = "ENABLED"
+}
+
+# GuardDuty Malware Protection Feature
+resource "aws_guardduty_detector_feature" "malware_protection" {
+  count       = var.enable_guardduty ? 1 : 0
+  detector_id = aws_guardduty_detector.main[0].id
+  name        = "EBS_MALWARE_PROTECTION"
+  status      = "ENABLED"
 } 

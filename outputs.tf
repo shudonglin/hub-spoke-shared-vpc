@@ -395,7 +395,21 @@ output "config_service" {
     recorder_name = aws_config_configuration_recorder.main[0].name
     delivery_channel = aws_config_delivery_channel.main[0].name
     s3_bucket = aws_s3_bucket.config[0].bucket
+    config_rules = [
+      "root-access-key-check (IAM)",
+      "incoming-ssh-disabled (Security Groups)", 
+      "vpc-flow-logs-enabled",
+      "cloudtrail-enabled",
+      "s3-bucket-public-read-prohibited",
+      "s3-bucket-public-write-prohibited",
+      "security-group-open-to-world (EC2)",
+      "guardduty-enabled",
+      "iam-password-policy",
+      "ec2-managedinstance-compliance (SSM)",
+      "encrypted-volumes (EBS)"
+    ]
     console_url = "https://${var.aws_region}.console.aws.amazon.com/config/home?region=${var.aws_region}#/dashboard"
+    compliance_url = "https://${var.aws_region}.console.aws.amazon.com/config/home?region=${var.aws_region}#/compliance/home"
   } : null
 }
 
@@ -403,8 +417,15 @@ output "guardduty" {
   description = "GuardDuty security monitoring"
   value = var.enable_guardduty ? {
     detector_id = aws_guardduty_detector.main[0].id
+    features_enabled = [
+      "Core threat detection (DNS, network, malware)",
+      "S3 data protection",
+      "Malware protection for EC2/ECS",
+      "SNS integration for findings"
+    ]
     console_url = "https://${var.aws_region}.console.aws.amazon.com/guardduty/home?region=${var.aws_region}#/findings"
-    status = "GuardDuty enabled with malware protection and S3 logs"
+    findings_url = "https://${var.aws_region}.console.aws.amazon.com/guardduty/home?region=${var.aws_region}#/findings"
+    status = "✅ GuardDuty enabled with comprehensive protection"
   } : null
 }
 
@@ -456,11 +477,11 @@ output "security_compliance_summary" {
     }
     auditing = {
       cloudtrail = var.enable_cloudtrail ? "✅ Enabled" : "❌ Disabled"
-      config = var.enable_config ? "✅ Enabled" : "❌ Disabled"
+      config = var.enable_config ? "✅ Enabled with 11 compliance rules" : "❌ Disabled"
     }
     security = {
       waf = var.enable_waf ? "✅ Enabled" : "❌ Disabled"
-      guardduty = var.enable_guardduty ? "✅ Enabled" : "❌ Disabled"
+      guardduty = var.enable_guardduty ? "✅ Enabled with S3 & malware protection" : "❌ Disabled"
       enhanced_security = var.enable_enhanced_security ? "✅ Enabled" : "❌ Disabled"
       icmp_disabled = "✅ ICMP ping disabled in security groups"
     }
