@@ -145,6 +145,8 @@ variable "enable_waf" {
   default     = true
 }
 
+
+
 variable "waf_rate_limit" {
   description = "Rate limit for WAF (requests per 5 minutes)"
   type        = number
@@ -182,4 +184,10 @@ variable "enable_aws_managed_rules" {
     unix_operating_system  = optional(bool, false)
   })
   default = {}
+}
+
+variable "enable_spoke2_alb_access" {
+  description = "Enable ALB routing to spoke2 VPC (if false, spoke2 remains independent)"
+  type        = bool
+  default     = true
 } 

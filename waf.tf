@@ -61,84 +61,98 @@ resource "aws_lb" "main" {
   })
 }
 
-# Target groups for test instances (all in shared VPC for ALB compatibility)
-resource "aws_lb_target_group" "test_instances" {
-  for_each = var.enable_waf && var.create_test_instances ? toset(var.test_instance_vpcs) : toset([])
+# Target groups for spoke VPCs (spoke1 always, spoke2 conditional)
+resource "aws_lb_target_group" "spoke_targets" {
+  for_each = var.enable_waf && var.create_test_instances ? toset([
+    for vpc in var.test_instance_vpcs : vpc 
+    if vpc == "spoke1" || (vpc == "spoke2" && var.enable_spoke2_alb_access)
+  ]) : toset([])
   
-  name     = "${var.project_name}-${each.key}-tg"
-  port     = 80
-  protocol = "HTTP"
-  vpc_id   = aws_vpc.vpcs["shared"].id  # All target groups must be in same VPC as ALB
-  target_type = "ip"  # Use IP targets to allow cross-VPC routing via Transit Gateway
+  name        = "${var.project_name}-${each.key}-tg"
+  port        = 80
+  protocol    = "HTTP"
+  vpc_id      = aws_vpc.vpcs["shared"].id  # ALB target groups must be in same VPC as ALB
+  target_type = "ip"  # Use IP targets for cross-VPC routing
 
   health_check {
     enabled             = true
     healthy_threshold   = 2
     interval            = 30
     matcher             = "200"
-    path                = "/"
+    path                = "/health"  # Use health endpoint for better reliability
     port                = "traffic-port"
     protocol            = "HTTP"
-    timeout             = 5
-    unhealthy_threshold = 2
+    timeout             = 10         # Increased timeout for cross-VPC routing
+    unhealthy_threshold = 3          # Allow more retries for cross-VPC latency
   }
 
   tags = merge(local.common_tags, {
     Name = "${var.project_name}-${each.key}-tg"
+    Purpose = each.key == "spoke1" ? "Primary Web Server" : "Secondary/Test Server"
   })
 }
 
-# Target group attachments (using IP addresses for cross-VPC routing)
-resource "aws_lb_target_group_attachment" "test_instances" {
-  for_each = var.enable_waf && var.create_test_instances ? toset(var.test_instance_vpcs) : toset([])
+# Target group attachments for spoke VPCs
+resource "aws_lb_target_group_attachment" "spoke_targets" {
+  for_each = var.enable_waf && var.create_test_instances ? toset([
+    for vpc in var.test_instance_vpcs : vpc 
+    if vpc == "spoke1" || (vpc == "spoke2" && var.enable_spoke2_alb_access)
+  ]) : toset([])
 
-  target_group_arn  = aws_lb_target_group.test_instances[each.key].arn
+  target_group_arn  = aws_lb_target_group.spoke_targets[each.key].arn
   target_id         = aws_instance.test_instances[each.key].private_ip
   port              = 80
   availability_zone = aws_instance.test_instances[each.key].availability_zone
 }
 
-# ALB Listener (HTTP)
+# ALB Listener (HTTP) - spoke1 primary, spoke2 optional
 resource "aws_lb_listener" "main" {
   count             = var.enable_waf ? 1 : 0
   load_balancer_arn = aws_lb.main[0].arn
   port              = "80"
   protocol          = "HTTP"
 
-  # Default action - round robin across all target groups
+  # Default action - forward to primary web server (spoke1)
   default_action {
-    type = "forward"
-    
-    dynamic "forward" {
-      for_each = var.create_test_instances ? [1] : []
-      content {
-        dynamic "target_group" {
-          for_each = aws_lb_target_group.test_instances
-          content {
-            arn    = target_group.value.arn
-            weight = 100
-          }
-        }
-      }
-    }
+    type             = "forward"
+    target_group_arn = var.create_test_instances && contains(var.test_instance_vpcs, "spoke1") ? aws_lb_target_group.spoke_targets["spoke1"].arn : null
   }
 }
 
-# Listener rules for path-based routing
-resource "aws_lb_listener_rule" "test_instance_routes" {
-  for_each = var.enable_waf && var.create_test_instances ? toset(var.test_instance_vpcs) : toset([])
+# Listener rules for optional routing to spoke2 (when enabled)
+resource "aws_lb_listener_rule" "spoke2_routing" {
+  count = var.enable_waf && var.create_test_instances && var.enable_spoke2_alb_access && contains(var.test_instance_vpcs, "spoke2") ? 1 : 0
 
   listener_arn = aws_lb_listener.main[0].arn
-  priority     = index(var.test_instance_vpcs, each.key) + 100
+  priority     = 100
 
   action {
     type             = "forward"
-    target_group_arn = aws_lb_target_group.test_instances[each.key].arn
+    target_group_arn = aws_lb_target_group.spoke_targets["spoke2"].arn
   }
 
   condition {
     path_pattern {
-      values = ["/${each.key}*"]
+      values = ["/spoke2*", "/test2*", "/secondary*"]
+    }
+  }
+}
+
+# Optional: Host-based routing for spoke2 (when enabled)
+resource "aws_lb_listener_rule" "spoke2_host_routing" {
+  count = var.enable_waf && var.create_test_instances && var.enable_spoke2_alb_access && contains(var.test_instance_vpcs, "spoke2") ? 1 : 0
+
+  listener_arn = aws_lb_listener.main[0].arn
+  priority     = 101
+
+  action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.spoke_targets["spoke2"].arn
+  }
+
+  condition {
+    host_header {
+      values = ["spoke2.*", "test2.*", "secondary.*"]
     }
   }
 }

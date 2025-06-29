@@ -7,12 +7,17 @@ This document explains the AWS WAF (Web Application Firewall) implementation in 
 The WAF implementation adds:
 - **Application Load Balancer (ALB)** in the shared VPC public subnets
 - **AWS WAF Web ACL** with comprehensive rule sets
-- **Target Groups** for your test instances
+- **Target Group** for spoke1 web server only (spoke2 is independent)
 - **CloudWatch Logging** for monitoring and analysis
 
 ```
-Internet → AWS WAF → Application Load Balancer → Target Groups → Test Instances
+Internet → AWS WAF → Application Load Balancer → Spoke1 Web Server
+Spoke2 Test Instance (independent, not behind ALB)
 ```
+
+### Traffic Flow
+- **Public Traffic**: Internet → ALB/WAF → Transit Gateway → Spoke1 VPC (nginx)
+- **Internal Testing**: Spoke2 → Transit Gateway → Spoke1 (connectivity/DNS testing)
 
 ## Components Created
 
@@ -100,11 +105,19 @@ enable_aws_managed_rules = {
 
 After deployment, access your applications via:
 
-- **Shared VPC**: `http://<ALB_DNS_NAME>/shared`
-- **Spoke1 VPC**: `http://<ALB_DNS_NAME>/spoke1`
-- **Spoke2 VPC**: `http://<ALB_DNS_NAME>/spoke2`
+### Public Access (via ALB with WAF protection)
+- **Main Application**: `http://<ALB_DNS_NAME>`
+- **Health Check**: `http://<ALB_DNS_NAME>/health`
+- **WAF Test Endpoints**: 
+  - `http://<ALB_DNS_NAME>/admin` (should be blocked)
+  - `http://<ALB_DNS_NAME>/test-sql` (SQL injection test)
+  - `http://<ALB_DNS_NAME>/test-xss` (XSS test)
 
-The ALB DNS name will be in the Terraform outputs.
+### Internal Access (within VPC)
+- **Spoke1 (Nginx)**: `http://test-spoke1.gic-private.local`
+- **Spoke2 (Apache)**: `http://test-spoke2.gic-private.local` (not behind ALB)
+
+The ALB DNS name will be in the Terraform outputs. Only spoke1 is accessible via the ALB - spoke2 is independent.
 
 ## Monitoring and Logging
 

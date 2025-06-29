@@ -152,27 +152,33 @@ output "test_instances" {
 }
 
 output "connectivity_test_commands" {
-  description = "Commands to test connectivity between instances"
+  description = "Commands to test connectivity from spoke2 to spoke1 (and DNS resolution)"
   value = var.create_test_instances && length(var.test_instance_vpcs) > 1 ? {
-    cross_vpc_tests = [
-      "# Connect to any test instance and run:",
-      "aws ssm start-session --target <INSTANCE_ID>",
+    test_from_spoke2 = [
+      "# Connect to spoke2 test instance:",
+      "aws ssm start-session --target ${var.create_test_instances ? aws_instance.test_instances["spoke2"].id : "<SPOKE2_INSTANCE_ID>"}",
       "",
-      "# Inside the instance, run the connectivity test script:",
-      "sudo -u ec2-user /home/ec2-user/test-connectivity.sh",
-      "",
-      "# Or test individual components:",
-      "# Test DNS resolution:",
+      "# Test DNS resolution from spoke2:",
       "nslookup test-spoke1.${var.domain_name}",
       "nslookup test-spoke2.${var.domain_name}",
       "",
-      "# Test ping connectivity:",
+      "# Test connectivity from spoke2 to spoke1:",
       "ping -c 3 test-spoke1.${var.domain_name}",
-      "ping -c 3 test-spoke2.${var.domain_name}",
-      "",
-      "# Test HTTP connectivity:",
       "curl http://test-spoke1.${var.domain_name}",
-      "curl http://test-spoke2.${var.domain_name}"
+      "",
+      "# Run comprehensive connectivity test script:",
+      "sudo -u ec2-user /home/ec2-user/test-connectivity.sh"
+    ]
+    web_access_tests = [
+      "# Test ALB access (external):",
+      "curl http://${var.enable_waf ? aws_lb.main[0].dns_name : "<ALB_DNS_NAME>"}",
+      "",
+      "# Test direct access to spoke1 (from within VPC):",
+      "curl http://test-spoke1.${var.domain_name}",
+      "",
+      "# DNS troubleshooting (if needed):",
+      "bash fix-dns.sh",
+      "bash dns-troubleshoot.sh"
     ]
   } : null
 }
@@ -190,8 +196,8 @@ output "bastion_host" {
       "ssh -i ~/.ssh/your-key.pem ec2-user@${aws_eip.bastion_eip[0].public_ip}",
       "",
       "# From bastion, SSH to test instances:",
-      "ssh ec2-user@test-spoke1.internal.local",
-      "ssh ec2-user@test-spoke2.internal.local",
+      "ssh ec2-user@test-spoke1.${var.domain_name}",
+      "ssh ec2-user@test-spoke2.${var.domain_name}",
       "",
       "# Or use SSM from bastion:",
       "aws ssm start-session --target <INSTANCE_ID>"
@@ -236,7 +242,50 @@ output "waf_cloudwatch_log_group" {
 output "web_application_urls" {
   description = "URLs to access web applications through ALB"
   value = var.enable_waf && var.create_test_instances ? {
-    for vpc in var.test_instance_vpcs :
-    vpc => "http://${aws_lb.main[0].dns_name}/${vpc}"
-  } : {}
+    main_app = "http://${aws_lb.main[0].dns_name}"
+    health_check = "http://${aws_lb.main[0].dns_name}/health"
+    waf_testing = {
+      admin_panel = "http://${aws_lb.main[0].dns_name}/admin"
+      sql_injection = "http://${aws_lb.main[0].dns_name}/test-sql?id=1' OR '1'='1"
+      xss_test = "http://${aws_lb.main[0].dns_name}/test-xss"
+    }
+    spoke2_access = var.enable_spoke2_alb_access && contains(var.test_instance_vpcs, "spoke2") ? {
+      path_based = "http://${aws_lb.main[0].dns_name}/spoke2"
+      secondary_path = "http://${aws_lb.main[0].dns_name}/test2"
+      note = "Spoke2 accessible via ALB with path-based routing"
+    } : null
+    spoke2_note = var.enable_spoke2_alb_access && contains(var.test_instance_vpcs, "spoke2") ? null : "Spoke2 ALB access disabled - use direct DNS or enable via enable_spoke2_alb_access=true"
+  } : null
+}
+
+output "direct_instance_access" {
+  description = "Direct access to instances (not through ALB)"
+  value = var.create_test_instances ? {
+    spoke1_nginx = {
+      description = "Nginx web server (also behind ALB)"
+      dns_name = "test-spoke1.${var.domain_name}"
+      private_ip = aws_instance.test_instances["spoke1"].private_ip
+      note = "Available via ALB and direct DNS"
+    }
+    spoke2_test = {
+      description = "Independent test instance (not behind ALB)"
+      dns_name = "test-spoke2.${var.domain_name}"
+      private_ip = aws_instance.test_instances["spoke2"].private_ip
+      note = "Used for connectivity and DNS testing only"
+    }
+  } : null
+}
+
+output "architecture_summary" {
+  description = "Summary of the deployed architecture"
+  value = var.enable_waf && var.create_test_instances ? {
+    alb_location = "Shared VPC (centralized)"
+    web_server = "Spoke1: Nginx behind ALB (private subnet) - Primary"
+    test_instance = var.enable_spoke2_alb_access ? "Spoke2: Optional ALB routing + independent access" : "Spoke2: Independent test instance only"
+    waf_protection = "Enabled with OWASP Top 10 + custom rules"
+    routing = var.enable_spoke2_alb_access ? "ALB → Transit Gateway → Spoke1 (default) & Spoke2 (optional paths)" : "ALB → Transit Gateway → Spoke1 VPC only"
+    health_checks = var.enable_spoke2_alb_access ? "ALB health checks to both spoke1 and spoke2" : "ALB health checks via Transit Gateway to spoke1"
+    spoke2_alb_access = var.enable_spoke2_alb_access ? "Enabled (paths: /spoke2*, /test2*, /secondary*)" : "Disabled (direct DNS only)"
+    spoke2_purpose = "DNS resolution, connectivity testing, and optional web serving"
+  } : null
 } 
