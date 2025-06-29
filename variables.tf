@@ -187,4 +187,96 @@ variable "enable_aws_managed_rules" {
 }
 
 # Removed enable_spoke2_alb_access variable - spoke2 is now completely independent
-# ALB is only in spoke1 VPC for direct access to app1 
+# ALB is only in spoke1 VPC for direct access to app1
+
+# ===============================
+# Enhanced Monitoring & Security
+# ===============================
+
+variable "enable_enhanced_monitoring" {
+  description = "Enable enhanced monitoring with CloudWatch alarms and dashboards"
+  type        = bool
+  default     = true
+}
+
+variable "cloudwatch_log_retention_days" {
+  description = "CloudWatch Logs retention period for application and system logs (days)"
+  type        = number
+  default     = 14
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 3653], var.cloudwatch_log_retention_days)
+    error_message = "Retention days must be one of the valid CloudWatch Logs retention periods."
+  }
+}
+
+variable "enable_sns_alerts" {
+  description = "Enable SNS alerts for CloudWatch alarms and security events"
+  type        = bool
+  default     = true
+}
+
+variable "sns_alert_email" {
+  description = "Email address to receive SNS alerts (optional)"
+  type        = string
+  default     = ""
+}
+
+variable "enable_cloudtrail" {
+  description = "Enable AWS CloudTrail for API logging and auditing"
+  type        = bool
+  default     = true
+}
+
+variable "enable_config" {
+  description = "Enable AWS Config for configuration monitoring and compliance"
+  type        = bool
+  default     = true
+}
+
+variable "enable_guardduty" {
+  description = "Enable AWS GuardDuty for security monitoring and threat detection"
+  type        = bool
+  default     = true
+}
+
+variable "config_delivery_frequency" {
+  description = "Frequency for AWS Config snapshots"
+  type        = string
+  default     = "TwentyFour_Hours"
+  validation {
+    condition = contains([
+      "One_Hour", "Three_Hours", "Six_Hours", "Twelve_Hours", "TwentyFour_Hours"
+    ], var.config_delivery_frequency)
+    error_message = "Config delivery frequency must be one of the valid options."
+  }
+}
+
+variable "enable_enhanced_security" {
+  description = "Enable enhanced security features (NACLs, additional security groups)"
+  type        = bool
+  default     = true
+}
+
+variable "enable_vpc_endpoints" {
+  description = "Enable VPC endpoints for SSM (adds ~$63-135/month cost - only recommended for production)"
+  type        = bool
+  default     = false
+}
+
+variable "enable_vpn_gateway" {
+  description = "Enable VPN Gateway for site-to-site VPN connectivity"
+  type        = bool
+  default     = false
+}
+
+variable "management_cidr_blocks" {
+  description = "CIDR blocks for management network access"
+  type        = list(string)
+  default     = ["10.0.0.0/8"]  # Adjust to your management network
+}
+
+variable "enable_security_automation" {
+  description = "Enable security automation with Lambda functions"
+  type        = bool
+  default     = false
+} 

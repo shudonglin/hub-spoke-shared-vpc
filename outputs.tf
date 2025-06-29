@@ -210,6 +210,10 @@ output "bastion_host" {
 # WAF Outputs
 # ===============================
 
+# ===============================
+# DNS Records and ALB Information
+# ===============================
+
 output "alb_dns_name" {
   description = "DNS name of the Application Load Balancer"
   value       = var.enable_waf ? aws_lb.main[0].dns_name : null
@@ -223,6 +227,53 @@ output "alb_zone_id" {
 output "alb_arn" {
   description = "ARN of the Application Load Balancer"
   value       = var.enable_waf ? aws_lb.main[0].arn : null
+}
+
+output "route53_dns_records" {
+  description = "Route53 DNS records for EC2 instances"
+  value = var.create_test_instances ? {
+    spoke1_instance = {
+      dns_name = "test-spoke1.${var.domain_name}"
+      private_ip = aws_instance.test_instances["spoke1"].private_ip
+      record_type = "A"
+      vpc_location = "Spoke1 VPC"
+      description = "Nginx web server behind ALB"
+    }
+    spoke2_instance = {
+      dns_name = "test-spoke2.${var.domain_name}"
+      private_ip = aws_instance.test_instances["spoke2"].private_ip
+      record_type = "A" 
+      vpc_location = "Spoke2 VPC"
+      description = "Independent Apache test server"
+    }
+    private_zone = {
+      zone_name = var.domain_name
+      zone_id = aws_route53_zone.private_zone.zone_id
+      description = "Private hosted zone for cross-VPC DNS resolution"
+    }
+  } : null
+}
+
+output "dns_and_alb_summary" {
+  description = "Complete DNS and ALB access summary"
+  value = var.enable_waf && var.create_test_instances ? {
+    alb_access = {
+      url = "http://${aws_lb.main[0].dns_name}"
+      dns_name = aws_lb.main[0].dns_name
+      location = "Spoke1 VPC"
+      targets = "App1 (Nginx) only"
+    }
+    route53_records = {
+      app1_dns = "test-spoke1.${var.domain_name} → ${aws_instance.test_instances["spoke1"].private_ip}"
+      app2_dns = "test-spoke2.${var.domain_name} → ${aws_instance.test_instances["spoke2"].private_ip}" 
+      zone = "${var.domain_name} (${aws_route53_zone.private_zone.zone_id})"
+    }
+    access_methods = {
+      app1_via_alb = "http://${aws_lb.main[0].dns_name} (with WAF protection)"
+      app1_direct = "http://test-spoke1.${var.domain_name} (internal access)"
+      app2_direct = "http://test-spoke2.${var.domain_name} (internal access only)"
+    }
+  } : null
 }
 
 output "waf_web_acl_arn" {
@@ -288,4 +339,139 @@ output "architecture_summary" {
     architecture_type = "Distributed ALB with centralized WAF"
     benefits = "Better performance, isolation, no cross-VPC routing latency"
   } : null
+}
+
+# ===============================
+# Enhanced Monitoring Outputs
+# ===============================
+
+output "monitoring_dashboard" {
+  description = "CloudWatch Dashboard for infrastructure monitoring"
+  value = var.enable_enhanced_monitoring ? {
+    dashboard_name = aws_cloudwatch_dashboard.main[0].dashboard_name
+    dashboard_url = "https://${var.aws_region}.console.aws.amazon.com/cloudwatch/home?region=${var.aws_region}#dashboards:name=${aws_cloudwatch_dashboard.main[0].dashboard_name}"
+  } : null
+}
+
+output "cloudwatch_alarms" {
+  description = "CloudWatch alarms for monitoring"
+  value = var.enable_enhanced_monitoring ? {
+    cpu_alarms = var.create_test_instances ? {
+      for vpc in var.test_instance_vpcs : vpc => aws_cloudwatch_metric_alarm.high_cpu[vpc].alarm_name
+    } : {}
+    memory_alarms = var.create_test_instances ? {
+      for vpc in var.test_instance_vpcs : vpc => aws_cloudwatch_metric_alarm.high_memory[vpc].alarm_name
+    } : {}
+    alb_response_time_alarm = var.enable_waf ? aws_cloudwatch_metric_alarm.alb_response_time[0].alarm_name : null
+  } : null
+}
+
+output "sns_topic" {
+  description = "SNS topic for alerts"
+  value = var.enable_sns_alerts ? {
+    topic_arn = aws_sns_topic.alerts[0].arn
+    topic_name = aws_sns_topic.alerts[0].name
+    email_subscription = var.sns_alert_email != "" ? "Email alerts configured" : "No email configured - add to terraform.tfvars"
+  } : null
+}
+
+# ===============================
+# Security Monitoring Outputs
+# ===============================
+
+output "cloudtrail" {
+  description = "CloudTrail configuration for API auditing"
+  value = var.enable_cloudtrail ? {
+    trail_name = aws_cloudtrail.main[0].name
+    trail_arn = aws_cloudtrail.main[0].arn
+    s3_bucket = aws_s3_bucket.cloudtrail[0].bucket
+    console_url = "https://${var.aws_region}.console.aws.amazon.com/cloudtrail/home?region=${var.aws_region}#/trails/${aws_cloudtrail.main[0].arn}"
+  } : null
+}
+
+output "config_service" {
+  description = "AWS Config for configuration monitoring"
+  value = var.enable_config ? {
+    recorder_name = aws_config_configuration_recorder.main[0].name
+    delivery_channel = aws_config_delivery_channel.main[0].name
+    s3_bucket = aws_s3_bucket.config[0].bucket
+    console_url = "https://${var.aws_region}.console.aws.amazon.com/config/home?region=${var.aws_region}#/dashboard"
+  } : null
+}
+
+output "guardduty" {
+  description = "GuardDuty security monitoring"
+  value = var.enable_guardduty ? {
+    detector_id = aws_guardduty_detector.main[0].id
+    console_url = "https://${var.aws_region}.console.aws.amazon.com/guardduty/home?region=${var.aws_region}#/findings"
+    status = "GuardDuty enabled with malware protection and S3 logs"
+  } : null
+}
+
+# ===============================
+# Enhanced Security Outputs
+# ===============================
+
+output "enhanced_security_features" {
+  description = "Enhanced security features deployed"
+  value = var.enable_enhanced_security ? {
+    network_acls = "Deployed on all VPCs for additional security layer"
+    vpc_endpoints = var.enable_vpc_endpoints ? {
+      ssm_endpoints = "SSM endpoints deployed in all VPCs for secure management (~$63-135/month)"
+      s3_gateway = "S3 gateway endpoint deployed"
+      dynamodb_gateway = "DynamoDB gateway endpoint deployed"
+    } : {
+      ssm_access = "SSM access via NAT Gateway (cost-optimized)"
+      s3_gateway = "S3 gateway endpoint deployed"
+      dynamodb_gateway = "DynamoDB gateway endpoint deployed"
+    }
+    security_groups = {
+      database_tier = "Database security groups with restricted access"
+      management = "Management security group for admin access"
+      vpc_endpoints = var.enable_vpc_endpoints ? "VPC endpoint security groups deployed" : "VPC endpoint security groups disabled (cost optimization)"
+    }
+  } : null
+}
+
+output "vpn_gateway" {
+  description = "VPN Gateway information"
+  value = var.enable_vpn_gateway ? {
+    vpn_gateway_id = aws_vpn_gateway.main[0].id
+    status = "VPN Gateway attached to shared VPC"
+    note = "Configure customer gateway and VPN connection separately"
+  } : null
+}
+
+# ===============================
+# Security & Compliance Summary
+# ===============================
+
+output "security_compliance_summary" {
+  description = "Summary of security and compliance features"
+  value = {
+    monitoring = {
+      vpc_flow_logs = var.enable_vpc_flow_logs ? "✅ Enabled" : "❌ Disabled"
+      cloudwatch_monitoring = var.enable_enhanced_monitoring ? "✅ Enabled" : "❌ Disabled"
+      sns_alerts = var.enable_sns_alerts ? "✅ Enabled" : "❌ Disabled"
+    }
+    auditing = {
+      cloudtrail = var.enable_cloudtrail ? "✅ Enabled" : "❌ Disabled"
+      config = var.enable_config ? "✅ Enabled" : "❌ Disabled"
+    }
+    security = {
+      waf = var.enable_waf ? "✅ Enabled" : "❌ Disabled"
+      guardduty = var.enable_guardduty ? "✅ Enabled" : "❌ Disabled"
+      enhanced_security = var.enable_enhanced_security ? "✅ Enabled" : "❌ Disabled"
+      icmp_disabled = "✅ ICMP ping disabled in security groups"
+    }
+    encryption = {
+      vpc_flow_logs = var.enable_vpc_flow_logs ? "✅ KMS encrypted" : "❌ Not applicable"
+      cloudtrail = var.enable_cloudtrail ? "✅ KMS encrypted" : "❌ Not applicable"
+      s3_buckets = "✅ Server-side encryption enabled"
+    }
+    cost_optimization = {
+      single_nat_gateway = var.single_nat_gateway ? "✅ Enabled (~$135/month savings)" : "❌ Disabled"
+      bastion_host = var.create_bastion_host ? "❌ Enabled (~$8/month cost)" : "✅ Disabled (using SSM)"
+    }
+  }
 } 

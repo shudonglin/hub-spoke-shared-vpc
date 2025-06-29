@@ -154,4 +154,16 @@ enable_aws_managed_rules = {
   sql_injection          = true   # SQL injection protection
   linux_operating_system = true   # Linux-specific protections
   unix_operating_system  = false  # Unix-specific protections
-} 
+}
+
+# ===============================
+# Security & VPC Endpoints Configuration
+# ===============================
+
+# Enhanced security features (NACLs, additional security groups)
+enable_enhanced_security = true
+
+# VPC Endpoints for SSM (EXPENSIVE - adds ~$63-135/month)
+# Only enable for production environments requiring maximum security
+# Your instances can already access SSM through NAT Gateway for FREE
+enable_vpc_endpoints = false 

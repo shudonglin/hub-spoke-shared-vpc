@@ -11,7 +11,7 @@ This infrastructure creates a modern, scalable hub-and-spoke network architectur
 - **Centralized WAF**: Comprehensive web application firewall protection
 - **Transit Gateway**: Central connectivity hub for inter-VPC communication
 - **Route53**: Private hosted zone with DNS resolution across all VPCs
-- **VPC Endpoints**: Centralized AWS service gateway endpoints (S3, DynamoDB)
+- **VPC Endpoints**: Optional AWS service endpoints (disabled by default for cost optimization)
 - **Multi-AZ Deployment**: Each VPC spans 3 availability zones
 - **Security Monitoring**: VPC Flow Logs with KMS encryption
 
@@ -84,7 +84,7 @@ Internet → Direct DNS       → App2 (Independent Apache server)
 │   10.1.0.0/16   │    │  (Hub)          │    │   10.2.0.0/16   │
 │                 │    │  10.0.0.0/16    │    │                 │
 │  ┌─────────────┐│    │                 │    │                 │
-│  │ ALB + WAF   ││    │  VPC Endpoints  │    │  Test Instance  │
+│  │ ALB + WAF   ││    │  VPC Endpoints* │    │  Test Instance  │
 │  │ App1 (Nginx)││    │  Route53        │    │  App2 (Apache)  │
 │  └─────────────┘│    │  DNS Resolver   │    │                 │
 └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
@@ -100,6 +100,8 @@ Internet → Direct DNS       → App2 (Independent Apache server)
                     │  • Cross-VPC Routing      │
                     └───────────────────────────┘
 ```
+
+**Note:** *VPC Endpoints are optional and disabled by default to save ~$63-135/month. Your instances can access AWS services via NAT Gateway.
 
 ## 🔧 Prerequisites
 
@@ -337,13 +339,17 @@ aws cloudwatch get-metric-statistics \
     --statistics Sum
 ```
 
-### **5. Test VPC Endpoints**
+### **5. Test VPC Endpoints (Optional)**
+*Only if `enable_vpc_endpoints = true` - disabled by default for cost optimization*
 ```bash
-# Test S3 endpoint (should use private gateway)
+# Test S3 endpoint (uses free gateway endpoint)
 aws s3 ls
 
-# Test DynamoDB endpoint (should use private gateway)
+# Test DynamoDB endpoint (uses free gateway endpoint)
 aws dynamodb list-tables
+
+# SSM access (uses NAT Gateway when VPC endpoints disabled)
+aws ssm describe-instance-information
 
 # Check endpoint routing
 aws ec2 describe-route-tables --filters "Name=vpc-id,Values=<VPC_ID>"
@@ -396,7 +402,7 @@ fields @timestamp, httpRequest.clientIP, terminatingRuleId
 ### **Cost Optimization Features**
 - ✅ **Single NAT Gateway**: Saves ~$64/month vs multi-AZ
 - ✅ **Gateway Endpoints**: Free S3/DynamoDB access
-- ✅ **No Interface Endpoints**: Saves ~$22/month
+- ✅ **VPC Endpoints Disabled**: Saves ~$63-135/month (enable_vpc_endpoints = false)
 - ✅ **Short Log Retention**: 7 days for VPC Flow Logs
 - ✅ **t2.micro Instances**: Free tier eligible
 
