@@ -103,6 +103,24 @@ Internet → Direct DNS       → App2 (Independent Apache server)
 
 **Note:** *VPC Endpoints are optional and disabled by default to save ~$63-135/month. Your instances can access AWS services via NAT Gateway.
 
+## 🏛️ Visual Architecture Diagram
+
+The following diagram provides a detailed visual representation of the complete hub-and-spoke architecture, showing all VPCs, subnets, route tables, and networking components with their CIDR blocks and connectivity:
+
+![Hub and Spoke VPC Architecture](./images/hub-spoke-vpc.png)
+
+### **Key Components Illustrated:**
+- **Shared Services VPC (Hub)**: Central hub with Route53 resolver, optional VPC endpoints, and Transit Gateway attachment
+- **Spoke VPC 1**: Contains ALB with WAF protection and App1 (Nginx) with full multi-AZ deployment
+- **Spoke VPC 2**: Contains App2 (Apache) test instance with independent DNS access
+- **Transit Gateway**: Central connectivity hub with dedicated route tables for inter-VPC communication
+- **Route Tables**: Detailed routing configuration showing public, private, database, and TGW subnet routing
+- **CIDR Allocation**: Complete IP addressing scheme across all VPCs and subnets
+- **Security Groups**: Network-level security controls for each component
+- **Multi-AZ Design**: All components deployed across multiple availability zones for high availability
+
+This visual representation complements the text-based network topology above and provides a comprehensive view of the infrastructure's networking architecture, security boundaries, and traffic flows.
+
 ## 🔧 Prerequisites
 
 - Terraform >= 1.12.0
